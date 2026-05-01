@@ -118,11 +118,11 @@ final class CodexTrustedMacSelectionTests: XCTestCase {
         )
         service.setCurrentTrustedMacDeviceId(currentMacID)
         service.relayMacDeviceId = staleRelayMacID
-        SidebarMacNicknameStore.setNickname("Current Alias", for: currentMacID)
-        SidebarMacNicknameStore.setNickname("Stale Alias", for: staleRelayMacID)
+        SidebarComputerNicknameStore.setNickname("Current Alias", for: currentMacID)
+        SidebarComputerNicknameStore.setNickname("Stale Alias", for: staleRelayMacID)
         defer {
-            SidebarMacNicknameStore.setNickname("", for: currentMacID)
-            SidebarMacNicknameStore.setNickname("", for: staleRelayMacID)
+            SidebarComputerNicknameStore.setNickname("", for: currentMacID)
+            SidebarComputerNicknameStore.setNickname("", for: staleRelayMacID)
         }
 
         let presentation = service.trustedPairPresentation
@@ -144,7 +144,10 @@ final class CodexTrustedMacSelectionTests: XCTestCase {
     }
 
     private func makeService() -> CodexService {
-        let service = CodexService()
+        let suiteName = "CodexTrustedMacSelectionTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName) ?? .standard
+        defaults.removePersistentDomain(forName: suiteName)
+        let service = CodexService(defaults: defaults)
         Self.retainedServices.append(service)
         return service
     }

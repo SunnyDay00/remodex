@@ -10,9 +10,9 @@ struct AIChangeSetPersistence {
     private let fileName = "codex-ai-change-sets-v1.json"
 
     // Loads the stored change-set ledger from disk. Returns an empty array on failure.
-    func load(macDeviceId: String? = nil) -> [AIChangeSet] {
+    func load(macDeviceId: String? = nil, includeLegacyFallback: Bool = false) -> [AIChangeSet] {
         let decoder = JSONDecoder()
-        for fileURL in storeURLs(macDeviceId: macDeviceId) {
+        for fileURL in storeURLs(macDeviceId: macDeviceId, includeLegacyFallback: includeLegacyFallback) {
             guard let data = try? Data(contentsOf: fileURL) else {
                 continue
             }
@@ -41,7 +41,7 @@ struct AIChangeSetPersistence {
         storeURLs(macDeviceId: macDeviceId)[0]
     }
 
-    private func storeURLs(macDeviceId: String?) -> [URL] {
+    private func storeURLs(macDeviceId: String?, includeLegacyFallback: Bool = false) -> [URL] {
         let fm = FileManager.default
         let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fm.temporaryDirectory
@@ -58,6 +58,10 @@ struct AIChangeSetPersistence {
 
         let scopedURL = scopedDirectory.appendingPathComponent(fileName, isDirectory: false)
         guard normalizedMacDeviceId(macDeviceId) != nil else {
+            return [scopedURL]
+        }
+
+        guard includeLegacyFallback else {
             return [scopedURL]
         }
 

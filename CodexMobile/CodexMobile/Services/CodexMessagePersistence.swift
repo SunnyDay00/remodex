@@ -19,10 +19,10 @@ struct CodexMessagePersistence {
     ]
 
     // Loads the saved message map from disk. Returns an empty store on failure.
-    func load(macDeviceId: String? = nil) -> [String: [CodexMessage]] {
+    func load(macDeviceId: String? = nil, includeLegacyFallback: Bool = false) -> [String: [CodexMessage]] {
         let decoder = JSONDecoder()
 
-        for fileURL in storeURLs(macDeviceId: macDeviceId) {
+        for fileURL in storeURLs(macDeviceId: macDeviceId, includeLegacyFallback: includeLegacyFallback) {
             guard let data = try? Data(contentsOf: fileURL) else {
                 continue
             }
@@ -58,7 +58,7 @@ struct CodexMessagePersistence {
         storeURLs(macDeviceId: macDeviceId)[0]
     }
 
-    private func storeURLs(macDeviceId: String?) -> [URL] {
+    private func storeURLs(macDeviceId: String?, includeLegacyFallback: Bool = false) -> [URL] {
         let fm = FileManager.default
         let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fm.temporaryDirectory
@@ -67,7 +67,11 @@ struct CodexMessagePersistence {
         let names = [fileName] + legacyFileNames
         let scopedStoreURLs = names.map { directory.appendingPathComponent($0, isDirectory: false) }
 
-        guard let normalizedMacDeviceId = normalizedMacDeviceId(macDeviceId) else {
+        guard normalizedMacDeviceId(macDeviceId) != nil else {
+            return scopedStoreURLs
+        }
+
+        guard includeLegacyFallback else {
             return scopedStoreURLs
         }
 

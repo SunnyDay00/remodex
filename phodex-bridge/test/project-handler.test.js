@@ -113,10 +113,7 @@ test("handleProjectRequest responds to project JSON-RPC requests", async () => {
   const homeDir = makeTempHome();
   const previousHome = process.env.HOME;
   process.env.HOME = homeDir;
-  let resolveResponse;
-  const responsePromise = new Promise((resolve) => {
-    resolveResponse = resolve;
-  });
+  let response = "";
 
   try {
     const handled = handleProjectRequest(
@@ -126,15 +123,12 @@ test("handleProjectRequest responds to project JSON-RPC requests", async () => {
         params: { path: homeDir },
       }),
       (payload) => {
-        resolveResponse(payload);
+        response = payload;
       }
     );
 
     assert.equal(handled, true);
-    const response = await responsePromise;
-    const parsed = JSON.parse(response);
-    assert.equal(parsed.id, "project-1");
-    assert.equal(parsed.result.path, fs.realpathSync(homeDir));
+    await new Promise((resolve) => setImmediate(resolve));
   } finally {
     if (previousHome == null) {
       delete process.env.HOME;
@@ -142,4 +136,7 @@ test("handleProjectRequest responds to project JSON-RPC requests", async () => {
       process.env.HOME = previousHome;
     }
   }
+
+  assert.equal(JSON.parse(response).id, "project-1");
+  assert.equal(JSON.parse(response).result.path, fs.realpathSync(homeDir));
 });

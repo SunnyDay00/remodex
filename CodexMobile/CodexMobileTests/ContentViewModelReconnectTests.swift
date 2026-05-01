@@ -695,8 +695,8 @@ final class ContentViewModelReconnectTests: XCTestCase {
 
         try? await viewModel.connectWithAutoRecovery(
             codex: service,
-            serverURL: "wss://relay.local/relay/session",
-            performAutoRetry: false
+            performAutoRetry: false,
+            serverURLProvider: { "wss://relay.local/relay/session" }
         )
 
         XCTAssertNil(service.normalizedPreviousTrustedMacDeviceId)

@@ -42,8 +42,12 @@ extension CodexService {
     // Loads messages and assistant change-set metadata for the provided Mac namespace.
     func loadLocalState(for macDeviceId: String?) {
         let normalizedMacDeviceId = normalizedMacScopedDeviceId(macDeviceId)
+        let includeLegacyFallback = shouldLoadLegacyLocalStateFallback(for: normalizedMacDeviceId)
         withApplyingMacScopedState {
-            let loadedMessages = messagePersistence.load(macDeviceId: normalizedMacDeviceId).mapValues { messages in
+            let loadedMessages = messagePersistence.load(
+                macDeviceId: normalizedMacDeviceId,
+                includeLegacyFallback: includeLegacyFallback
+            ).mapValues { messages in
                 messages.map { message in
                     var value = message
                     value.isStreaming = false
@@ -62,7 +66,10 @@ extension CodexService {
             contextWindowUsageByThread.removeAll()
             removeAllThreadTimelineState()
 
-            let loadedChangeSets = aiChangeSetPersistence.load(macDeviceId: normalizedMacDeviceId)
+            let loadedChangeSets = aiChangeSetPersistence.load(
+                macDeviceId: normalizedMacDeviceId,
+                includeLegacyFallback: includeLegacyFallback
+            )
             aiChangeSetsByID = loadedChangeSets.reduce(into: [:]) { partialResult, changeSet in
                 partialResult[changeSet.id] = changeSet
             }
@@ -73,6 +80,11 @@ extension CodexService {
                 if let assistantMessageId = changeSet.assistantMessageId {
                     partialResult[assistantMessageId] = changeSet.id
                 }
+            }
+
+            if includeLegacyFallback {
+                saveLocalState(for: normalizedMacDeviceId)
+                markLegacyLocalStateFallbackMigrated()
             }
         }
     }
@@ -255,6 +267,10 @@ extension CodexService {
 }
 
 private extension CodexService {
+    static var legacyLocalStateMigrationCompletedDefaultsKey: String {
+        "codex.macScopedLocalState.legacyMigrationCompleted"
+    }
+
     func withApplyingMacScopedState(_ work: () -> Void) {
         let previous = isApplyingMacScopedState
         isApplyingMacScopedState = true
@@ -295,5 +311,17 @@ private extension CodexService {
             return nil
         }
         return trimmed
+    }
+
+    func shouldLoadLegacyLocalStateFallback(for macDeviceId: String?) -> Bool {
+        guard normalizedMacScopedDeviceId(macDeviceId) != nil else {
+            return false
+        }
+
+        return !defaults.bool(forKey: Self.legacyLocalStateMigrationCompletedDefaultsKey)
+    }
+
+    func markLegacyLocalStateFallbackMigrated() {
+        defaults.set(true, forKey: Self.legacyLocalStateMigrationCompletedDefaultsKey)
     }
 }
