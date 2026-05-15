@@ -86,11 +86,22 @@ extension CodexService {
         isLoadingThreads = true
         defer { isLoadingThreads = false }
 
-        // Sidebar metadata must be complete: capping thread/list hides older project chats.
-        async let activeThreadsFetch = fetchServerThreads(limit: limit)
+        // Sidebar metadata must be complete, but each active page can paint as it arrives.
         async let archivedThreadsFetch = fetchServerThreads(limit: limit, archived: true)
 
-        let activeThreads = try await activeThreadsFetch
+        let activeThreads = try await fetchServerThreads(limit: limit) { _, accumulatedThreads in
+            self.reconcileLocalThreadsWithServer(accumulatedThreads)
+
+            if self.activeThreadId == nil {
+                self.activeThreadId = self.firstLiveThreadID()
+            }
+        }
+        reconcileLocalThreadsWithServer(activeThreads)
+
+        if activeThreadId == nil {
+            activeThreadId = firstLiveThreadID()
+        }
+
         let archivedThreads: [CodexThread]
         do {
             archivedThreads = try await archivedThreadsFetch
@@ -200,6 +211,32 @@ extension CodexService {
     // Consumes the pending composer setup once the destination thread view appears.
     func consumePendingComposerAction(for threadId: String) -> CodexPendingThreadComposerAction? {
         pendingComposerActionByThreadID.removeValue(forKey: threadId)
+    }
+
+    // Reads an unsent local composer draft for the requested thread.
+    func composerDraft(for threadId: String) -> TurnComposerLocalDraft? {
+        composerDraftsByThreadID[threadId]
+    }
+
+    // Stores or clears an unsent composer draft, optionally flushing it to local disk.
+    func setComposerDraft(
+        _ draft: TurnComposerLocalDraft?,
+        for threadId: String,
+        persistToDisk: Bool = false
+    ) {
+        if let draft, !draft.isEmpty {
+            composerDraftsByThreadID[threadId] = draft
+        } else {
+            composerDraftsByThreadID.removeValue(forKey: threadId)
+        }
+
+        if persistToDisk {
+            persistComposerDrafts()
+        }
+    }
+
+    func persistComposerDrafts() {
+        composerDraftPersistence.save(composerDraftsByThreadID)
     }
 
     // Sends user input as a new turn against an existing (or newly created) thread.
@@ -775,7 +812,11 @@ enum CodexThreadStartProjectBinding {
 }
 
 extension CodexService {
-    func fetchServerThreads(limit: Int? = nil, archived: Bool = false) async throws -> [CodexThread] {
+    func fetchServerThreads(
+        limit: Int? = nil,
+        archived: Bool = false,
+        onPage: ((_ page: [CodexThread], _ accumulatedThreads: [CodexThread]) -> Void)? = nil
+    ) async throws -> [CodexThread] {
         var allThreads: [CodexThread] = []
         var nextCursor: JSONValue = .null
         var hasRequestedFirstPage = false
@@ -813,7 +854,9 @@ extension CodexService {
                 throw CodexServiceError.invalidResponse("thread/list response missing data array")
             }
 
-            allThreads.append(contentsOf: page.compactMap { decodeModel(CodexThread.self, from: $0) })
+            let decodedPage = page.compactMap { decodeModel(CodexThread.self, from: $0) }
+            allThreads.append(contentsOf: decodedPage)
+            onPage?(decodedPage, allThreads)
             nextCursor = nextThreadListCursor(from: resultObject)
             hasRequestedFirstPage = true
         } while shouldContinueThreadListPagination(

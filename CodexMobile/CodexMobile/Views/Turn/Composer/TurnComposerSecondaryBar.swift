@@ -42,6 +42,7 @@ struct TurnComposerSecondaryBar: View {
     let onTapCreateWorktree: () -> Void
 
     private let branchLabelColor = Color(.secondaryLabel)
+    private let accessControlSize: CGFloat = 36
     private var branchTextFont: Font { AppFont.subheadline() }
     private var branchChevronFont: Font { AppFont.system(size: 9, weight: .regular) }
     private var runtimeLabelTitle: String {
@@ -105,21 +106,16 @@ struct TurnComposerSecondaryBar: View {
                 }
             }
         } label: {
-            HStack(spacing: 6) {
-                Image(systemName: selectedAccessMode == .fullAccess
-                      ? "hand.thumbsup"
-                      : "hand.raised")
-                    .font(branchTextFont)
-
-                Image(systemName: "chevron.down")
-                    .font(branchChevronFont)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .adaptiveGlass(.regular, in: Capsule())
-            .foregroundStyle(branchLabelColor)
-            .contentShape(Capsule())
+            Image(systemName: selectedAccessMode == .fullAccess
+                  ? "hand.thumbsup"
+                  : "hand.raised")
+                .font(branchTextFont)
+                .frame(width: accessControlSize, height: accessControlSize)
+                .adaptiveGlass(.regular, in: Circle())
+                .foregroundStyle(branchLabelColor)
+                .contentShape(Circle())
         }
+        .menuIndicator(.hidden)
         .tint(branchLabelColor)
     }
 

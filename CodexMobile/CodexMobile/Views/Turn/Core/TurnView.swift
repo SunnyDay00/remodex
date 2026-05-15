@@ -151,6 +151,7 @@ struct TurnView: View {
                 isRepositoryLoadingToastVisible: false,
                 onRetryUserMessage: { messageText in
                     viewModel.input = messageText
+                    viewModel.saveLocalDraft(codex: codex, threadID: thread.id)
                     isInputFocused = true
                 },
                 onTapAssistantRevert: { message in
@@ -282,7 +283,7 @@ struct TurnView: View {
         .animation(.spring(response: 0.35, dampingFraction: 0.88), value: viewModel.gitActionSuccess?.id)
         .fullScreenCover(isPresented: isCameraPresentedBinding) {
             CameraImagePicker { data in
-                viewModel.enqueueCapturedImageData(data, codex: codex)
+                viewModel.enqueueCapturedImageData(data, codex: codex, threadID: thread.id)
             }
             .ignoresSafeArea()
         }
@@ -345,6 +346,7 @@ struct TurnView: View {
             },
             onScenePhaseChanged: { phase in
                 guard phase != .active else { return }
+                viewModel.saveLocalDraft(codex: codex, threadID: thread.id, persistToDisk: true)
                 cancelVoiceRecordingIfNeeded()
                 invalidatePendingVoicePreflight()
             },
@@ -353,6 +355,7 @@ struct TurnView: View {
             }
         )
         .onDisappear {
+            viewModel.saveLocalDraft(codex: codex, threadID: thread.id, persistToDisk: true)
             cancelVoiceRecordingIfNeeded()
             invalidatePendingVoicePreflight()
             clearVoiceRecovery()
@@ -864,12 +867,15 @@ struct TurnView: View {
         syncApprovalAlertPresentation()
         if let pendingComposerAction = codex.consumePendingComposerAction(for: thread.id) {
             viewModel.applyPendingComposerAction(pendingComposerAction)
+            viewModel.saveLocalDraft(codex: codex, threadID: thread.id)
             isInputFocused = true
+        } else {
+            viewModel.restoreSavedLocalDraftIfNeeded(codex: codex, threadID: thread.id)
         }
     }
 
     private func handlePhotoPickerItemsChanged(_ newItems: [PhotosPickerItem]) {
-        viewModel.enqueuePhotoPickerItems(newItems, codex: codex)
+        viewModel.enqueuePhotoPickerItems(newItems, codex: codex, threadID: thread.id)
         viewModel.photoPickerItems = []
     }
 
@@ -1152,6 +1158,7 @@ struct TurnView: View {
                     pendingComposerAction: .codeReview(target: pendingCodeReviewTarget(for: target))
                 )
                 viewModel.clearComposerReviewSelection()
+                viewModel.saveLocalDraft(codex: codex, threadID: thread.id, persistToDisk: true)
             } catch {
                 if let message = codex.userFacingTurnErrorMessageForFooter(from: error),
                    codex.lastErrorMessage?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true {
@@ -1254,7 +1261,7 @@ struct TurnView: View {
         let folderName = (fullPath as NSString).lastPathComponent
         return TurnThreadNavigationContext(
             folderName: folderName.isEmpty ? fullPath : folderName,
-            subtitle: fullPath,
+            subtitle: folderName.isEmpty ? fullPath : folderName,
             fullPath: fullPath
         )
     }
@@ -1446,6 +1453,7 @@ struct TurnView: View {
             )
             clearVoiceRecovery()
             viewModel.appendVoiceTranscript(transcript)
+            viewModel.saveLocalDraft(codex: codex, threadID: thread.id, persistToDisk: true)
             // Keep voice flows keyboard-free; users can tap into the draft afterward if they want to edit.
             isInputFocused = false
         } catch {

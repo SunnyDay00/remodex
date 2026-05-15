@@ -53,7 +53,7 @@ struct TurnToolbarContent: ToolbarContent {
         ToolbarItem(placement: .principal) {
             VStack(alignment: .leading, spacing: 1) {
                 Text(displayTitle)
-                    .font(AppFont.headline())
+                    .font(AppFont.subheadline(weight: .medium))
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -63,7 +63,7 @@ struct TurnToolbarContent: ToolbarContent {
                         isShowingPathSheet = true
                     } label: {
                         Text(context.subtitle)
-                            .font(AppFont.mono(.caption))
+                            .font(AppFont.caption(weight: .regular))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .truncationMode(.middle)

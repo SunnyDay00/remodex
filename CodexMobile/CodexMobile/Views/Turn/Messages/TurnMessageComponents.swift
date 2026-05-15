@@ -631,10 +631,6 @@ struct MessageRow: View, Equatable {
                 }
             }
 
-            if !suppressNativeProposedPlanShell && message.isStreaming && showsStreamingAnimations {
-                TypingIndicator()
-            }
-
             if !suppressNativeProposedPlanShell,
                let assistantBlockAccessoryState,
                hasTurnEndActions {
