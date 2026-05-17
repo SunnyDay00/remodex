@@ -29,20 +29,20 @@ struct SidebarHeaderView: View {
             HStack(spacing: 10) {
                 appLogo
                 Text("Remodex")
-                    .font(AppFont.system(size: 22, weight: .semibold))
+                    .font(AppFont.title3(weight: .medium))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
 
                 Spacer(minLength: 0)
 
+                overflowMenuButton
+
                 SidebarToolbarIconButton(
                     icon: .systemImage("gearshape.fill"),
                     accessibilityLabel: "Settings",
                     action: overflowActions.onOpenSettings
                 )
-
-                overflowMenuButton
 
                 if showsCloseButton {
                     hamburgerButton
@@ -58,7 +58,7 @@ struct SidebarHeaderView: View {
         Image("AppLogo")
             .resizable()
             .scaledToFit()
-            .frame(width: 26, height: 26)
+            .frame(width: 30, height: 30)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 

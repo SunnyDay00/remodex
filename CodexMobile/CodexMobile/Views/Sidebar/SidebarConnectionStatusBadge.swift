@@ -1,8 +1,8 @@
 // FILE: SidebarConnectionStatusBadge.swift
 // Purpose: Compact capsule pill that surfaces the live relay connection phase
-//          at the leading edge of the sidebar (top-left), just below the
-//          brand header. Hides itself when the relay is fully `.connected`
-//          so the happy-path sidebar stays uncluttered.
+//          underneath the connect/reconnect panel's recovery chips. Hides
+//          itself when the relay is fully `.connected` so the happy-path
+//          empty state never has a stale status indicator hanging around.
 // Layer: View Component
 // Exports: SidebarConnectionStatusBadge
 // Depends on: SwiftUI, CodexConnectionPhase, AppFont
@@ -19,15 +19,11 @@ struct SidebarConnectionStatusBadge: View {
         if connectionPhase == .connected {
             EmptyView()
         } else {
-            // Self-contained layout: leading-aligned within its row, with
-            // horizontal + bottom padding baked in. The connected branch above
-            // is a pure EmptyView so the surrounding stack truly collapses to
-            // zero height when there's nothing to show (avoiding a phantom
-            // padded slot under the search field on the happy path).
+            // No self-applied frame/padding so the parent (the panel's centered
+            // VStack) decides alignment + rhythm. The `.connected` branch above
+            // stays a pure EmptyView so the parent's stack spacing collapses
+            // cleanly when there is nothing to show.
             badge
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 16)
-                .padding(.bottom, 8)
                 .onAppear {
                     if connectionPhase == .connecting {
                         connectionAttemptStartedAt = Date()

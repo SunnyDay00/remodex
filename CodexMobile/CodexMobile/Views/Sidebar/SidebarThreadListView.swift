@@ -1,5 +1,5 @@
 // FILE: SidebarThreadListView.swift
-// Purpose: Renders sidebar thread groups and empty states.
+// Purpose: Renders sidebar project/rootless thread groups and empty states.
 // Layer: View Component
 // Exports: SidebarThreadListView
 
@@ -13,6 +13,9 @@ struct SidebarThreadListView: View {
     let groups: [SidebarThreadGroup]
     let selectedThread: CodexThread?
     let bottomContentInset: CGFloat
+    var emptyStateTitle: String = "No conversations"
+    var emptyFilterTitle: String = "No matching conversations"
+    var projectlessRootPaths: [String] = []
     let timingLabelProvider: (CodexThread) -> String?
     var showsTimestampRefreshIndicator: (CodexThread) -> Bool = { _ in false }
     let runBadgeStateByThreadID: [String: CodexThreadRunBadgeState]
@@ -30,6 +33,7 @@ struct SidebarThreadListView: View {
     @State private var knownProjectGroupIDs: Set<String> = []
     @State private var hasInitializedProjectGroupExpansion = false
     @State private var isPinnedExpanded = true
+    @State private var isChatGroupExpanded = true
     @State private var expandedSubagentParentIDs: Set<String> = []
     // Tracks project sections whose preview cap was manually lifted with Show more.
     @State private var revealedProjectGroupIDs: Set<String> = []
@@ -38,13 +42,13 @@ struct SidebarThreadListView: View {
         LazyVStack(alignment: .leading, spacing: 0) {
 
             if threads.isEmpty && !isFiltering {
-                Text(isConnected ? "No conversations" : "Connect to view conversations")
+                Text(isConnected ? emptyStateTitle : "Connect to view conversations")
                     .foregroundStyle(.secondary)
                     .font(AppFont.subheadline())
                     .padding(.horizontal, 16)
                     .padding(.top, 20)
             } else if groups.flatMap(\.threads).isEmpty && isFiltering {
-                Text("No matching conversations")
+                Text(emptyFilterTitle)
                     .foregroundStyle(.secondary)
                     .font(AppFont.subheadline())
                     .padding(.horizontal, 16)
@@ -89,6 +93,8 @@ struct SidebarThreadListView: View {
             pinnedGroupSection(group)
         case .project:
             projectGroupSection(group)
+        case .chat:
+            chatGroupSection(group)
         }
     }
 
@@ -107,7 +113,7 @@ struct SidebarThreadListView: View {
             )
 
             if isPinnedExpanded {
-                SidebarThreadGroupBlock {
+                SidebarThreadGroupBlock(bottomPadding: 0) {
                     VStack(spacing: 2) {
                         ForEach(hierarchy.rootThreads) { thread in
                             threadRowTree(
@@ -162,7 +168,13 @@ struct SidebarThreadListView: View {
             manuallyExpandedGroupIDs: revealedProjectGroupIDs
         )
 
-        SidebarThreadGroupBlock {
+        // `bottomPadding: 0` keeps the gap between two adjacent project
+        // sections constant regardless of whether the upper one is expanded
+        // or collapsed — the next project header already provides the
+        // spacing via its `.padding(.top, 18)`. Without this, an expanded
+        // section added ~14pt of extra margin under its card, making the
+        // sidebar visually "jump" each time a folder was toggled.
+        SidebarThreadGroupBlock(bottomPadding: 0) {
             VStack(spacing: 2) {
                 ForEach(visibleRootThreads) { thread in
                     threadRowTree(
@@ -193,6 +205,47 @@ struct SidebarThreadListView: View {
             onArchive: onArchiveProjectGroup.map { handler in { handler(group) } },
             onDelete: onDeleteProjectGroup.map { handler in { handler(group) } }
         )
+    }
+
+    // Rootless chats reuse the project header so the icon + label + new-chat
+    // affordance reads consistently. Toggling collapses just this section; the
+    // create button calls back into the parent's rootless chat creator.
+    private func chatGroupSection(_ group: SidebarThreadGroup) -> some View {
+        let hierarchy = SidebarSubagentHierarchy(groupThreads: group.threads)
+
+        return VStack(alignment: .leading, spacing: 0) {
+            SidebarProjectSectionHeader(
+                group: group,
+                isExpanded: isChatGroupExpanded,
+                isConnected: isConnected,
+                isCreatingThread: isCreatingThread,
+                onToggle: {
+                    withAnimation(.snappy(duration: 0.22)) {
+                        isChatGroupExpanded.toggle()
+                    }
+                },
+                onCreate: { onCreateThreadInProjectGroup(group) }
+            )
+            .padding(.horizontal)
+
+            if isChatGroupExpanded {
+                // Same `bottomPadding: 0` rationale as project sections:
+                // the next sibling header owns the inter-section spacing,
+                // so expanding/collapsing the rootless Chats block should
+                // not shift everything below it.
+                SidebarThreadGroupBlock(bottomPadding: 0) {
+                    VStack(spacing: 2) {
+                        ForEach(hierarchy.rootThreads) { thread in
+                            threadRowTree(
+                                thread,
+                                childrenByParentID: hierarchy.childrenByParentID
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        .clipped()
     }
 
     private func threadRowTree(
@@ -255,7 +308,12 @@ struct SidebarThreadListView: View {
             timingLabel: timingLabelProvider(thread),
             showsTimestampRefreshIndicator: showsTimestampRefreshIndicator(thread),
             isPinned: codex.isThreadPinned(thread.id),
-            pinnedProjectLabel: isPinnedRow ? thread.projectDisplayName : nil,
+            pinnedProjectLabel: isPinnedRow && !SidebarThreadGrouping.isRootlessChatThread(
+                thread,
+                projectlessRootPaths: projectlessRootPaths
+            )
+                ? thread.projectDisplayName
+                : nil,
             childSubagentCount: childSubagentCount,
             isSubagentExpanded: isSubagentExpanded,
             onToggleSubagents: onToggleSubagents,
@@ -300,6 +358,17 @@ struct SidebarThreadListView: View {
                     manuallyExpandedGroupIDs: revealedProjectGroupIDs
                 )
                 for rootThread in visibleRootThreads {
+                    collectVisibleSubagentThreadIDs(
+                        from: rootThread,
+                        childrenByParentID: hierarchy.childrenByParentID,
+                        ancestorThreadIDs: [],
+                        into: &visibleThreadIDs
+                    )
+                }
+            case .chat:
+                guard isChatGroupExpanded else { continue }
+                let hierarchy = SidebarSubagentHierarchy(groupThreads: group.threads)
+                for rootThread in hierarchy.rootThreads {
                     collectVisibleSubagentThreadIDs(
                         from: rootThread,
                         childrenByParentID: hierarchy.childrenByParentID,

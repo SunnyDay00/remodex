@@ -64,9 +64,13 @@ struct SidebarThreadRowView: View {
                 // Keep trailing metadata inside the main stack so long titles truncate before it.
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 6) {
-                        if isPinned && !thread.isSubagent {
-                            SidebarPinIcon(style: .rowBadge)
-                        }
+                        // Pinned glyph hidden on the row itself: pinned threads already
+                        // live under the "Pinned" section header, so the per-row badge
+                        // was redundant. Kept the `isPinned` plumbing for the context
+                        // menu / accessibility / future use.
+                        // if isPinned && !thread.isSubagent {
+                        //     SidebarPinIcon(style: .rowBadge)
+                        // }
 
                         Text(thread.displayTitle)
                             .font(AppFont.body())
@@ -92,7 +96,7 @@ struct SidebarThreadRowView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .padding(.horizontal)
+        .padding(.horizontal, 12)
         .padding(.vertical, 12)
     }
 
@@ -146,7 +150,7 @@ struct SidebarThreadRowView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .padding(.horizontal)
+        .padding(.horizontal, 12)
         .padding(.vertical, 6)
     }
 

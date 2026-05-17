@@ -1,9 +1,11 @@
 // FILE: SidebarPinnedSectionHeader.swift
 // Purpose: Tappable header for the Pinned section. Hosts the pin glyph, label
-//          and chevron that toggles the section open/closed.
+//          and chevron that toggles the section open/closed. Built on top of
+//          the shared `SidebarSectionHeader` so the slot grid (leading icon,
+//          label, trailing 30pt slot) matches every other sidebar section.
 // Layer: View Component
 // Exports: SidebarPinnedSectionHeader
-// Depends on: SwiftUI, HapticButton, SidebarPinIcon, RemodexIcon, AppFont
+// Depends on: SwiftUI, SidebarSectionHeader, SidebarPinIcon, RemodexIcon, AppFont
 
 import SwiftUI
 
@@ -13,28 +15,27 @@ struct SidebarPinnedSectionHeader: View {
     let onToggle: () -> Void
 
     var body: some View {
-        HapticButton(action: onToggle) {
-            HStack(spacing: 8) {
+        SidebarSectionHeader(
+            label: label,
+            verticalPadding: (top: 10, bottom: 0),
+            onToggle: onToggle,
+            leadingIcon: {
                 SidebarPinIcon(style: .header)
-                Text(label)
-                    .font(AppFont.body(weight: .medium))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                Spacer()
+            },
+            trailing: {
+                // Match the chat/subagent expansion chevron weight and size;
+                // the shared section slot handles alignment, while the glyph
+                // itself should stay visually quiet.
                 RemodexIcon.image(systemName: "chevron.right")
-                    .font(AppFont.subheadline(weight: .semibold))
+                    .font(AppFont.system(size: 11, weight: .semibold))
                     .foregroundStyle(.secondary.opacity(0.6))
+                    .frame(width: 18, height: 18)
                     .rotationEffect(.degrees(isExpanded ? 90 : 0))
                     .animation(.easeInOut(duration: 0.2), value: isExpanded)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-            .padding(.horizontal, 12)
-        }
-        .buttonStyle(.plain)
+            },
+            contextMenuContent: { EmptyView() }
+        )
         .padding(.horizontal, 16)
-        .padding(.top, 6)
-        .padding(.bottom, 10)
     }
 }
 

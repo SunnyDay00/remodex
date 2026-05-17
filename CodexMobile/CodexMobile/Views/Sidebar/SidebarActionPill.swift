@@ -3,10 +3,14 @@
 //          Terminal and Chat (and any future companion action) read as a
 //          matched pair — identical font, icon sizing, padding and capsule
 //          shape, with only the background / foreground swapped per style.
+//          The accent style mirrors the composer send button: it reads the
+//          user's `UserBubbleColor` preference and resolves it through
+//          `ctaPalette` (Default → Primary) so the pill stays a bold,
+//          label-colored CTA that swaps with the bubble color settings.
 // Layer: View Component
 // Exports: SidebarActionPill, SidebarActionPillStyle
-// Depends on: SwiftUI, RemodexIcon, AppFont, AdaptiveGlassModifier,
-//             HapticFeedback
+// Depends on: SwiftUI, RemodexIcon, AppFont, UserBubbleColor,
+//             AdaptiveGlassModifier, HapticFeedback
 
 import SwiftUI
 import UIKit
@@ -17,8 +21,9 @@ enum SidebarActionPillStyle {
     // Terminal-style: Liquid Glass capsule on iOS 26, plain glass material on
     // iOS 18, secondary label foreground. Pairs well with `AdaptiveGlassContainer`.
     case glass
-    // Chat-style: accent capsule fill, white foreground. Indicates the
-    // primary action in the bar.
+    // Chat-style: bubble-palette capsule fill (same color the composer send
+    // button uses), bubble-foreground text. Indicates the primary action in
+    // the bar.
     case accent
 }
 
@@ -39,6 +44,10 @@ struct SidebarActionPill: View {
     let hapticStyle: UIImpactFeedbackGenerator.FeedbackStyle
     let accessibilityLabelOverride: String?
     let onTap: () -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
+    @AppStorage(UserBubbleColor.storageKey)
+    private var userBubbleColorRawValue = UserBubbleColor.defaultStoredRawValue
 
     init(
         title: String,
@@ -95,7 +104,13 @@ struct SidebarActionPill: View {
         .foregroundStyle(foregroundColor)
         .padding(.horizontal, horizontalPadding)
         .padding(.vertical, verticalPadding)
-        .modifier(SidebarActionPillBackground(style: style, isEnabled: isEnabled))
+        .modifier(
+            SidebarActionPillBackground(
+                style: style,
+                isEnabled: isEnabled,
+                accentBackground: accentBackground
+            )
+        )
         .contentShape(Capsule())
     }
 
@@ -114,13 +129,26 @@ struct SidebarActionPill: View {
         }
     }
 
+    // MARK: - Palette resolution
+
+    private var ctaPalette: UserBubbleColor {
+        (UserBubbleColor(rawValue: userBubbleColorRawValue) ?? .default).ctaPalette
+    }
+
     private var foregroundColor: Color {
         switch style {
         case .glass:
             return .primary
         case .accent:
-            return Color.white
+            return isEnabled
+                ? ctaPalette.bubbleForeground(for: colorScheme)
+                : Color(.systemGray2)
         }
+    }
+
+    private var accentBackground: Color {
+        if !isEnabled { return Color(.systemGray5) }
+        return ctaPalette.bubbleBackground(for: colorScheme)
     }
 }
 
@@ -128,11 +156,13 @@ struct SidebarActionPill: View {
 
 // Both styles route through the shared `adaptiveGlass` helper so the iOS 26
 // Liquid Glass path and the iOS 18 fallback live in one place. The accent
-// style passes a `tint`; the helper now uses that tint as the fallback
-// background, so iOS 18 / glass-off still reads as a solid accent capsule.
+// style passes a `tint`; the helper uses that tint as the fallback
+// background, so iOS 18 / glass-off still reads as a solid bubble-palette
+// capsule.
 private struct SidebarActionPillBackground: ViewModifier {
     let style: SidebarActionPillStyle
     let isEnabled: Bool
+    let accentBackground: Color
 
     func body(content: Content) -> some View {
         switch style {
@@ -144,14 +174,10 @@ private struct SidebarActionPillBackground: ViewModifier {
                 .adaptiveGlass(
                     .regular,
                     isInteractive: true,
-                    tint: accentFill,
+                    tint: accentBackground,
                     in: Capsule()
                 )
         }
-    }
-
-    private var accentFill: Color {
-        isEnabled ? Color.accentColor : Color.accentColor.opacity(0.4)
     }
 }
 

@@ -64,6 +64,12 @@ struct ContentView: View {
     @State private var sidebarGestureAutoCommitted = false
     @State private var sidebarSelectionSuppressedUntil: Date?
     @State private var isOpeningNewChatFromSidebar = false
+    // Settings is presented as a `fullScreenCover` instead of being pushed
+    // onto `navigationPath` so the gear button works even when the sidebar
+    // header is hosted inside an iOS 26 `safeAreaBar`, whose Liquid Glass
+    // chrome can interfere with navigation-stack pushes from buttons nested
+    // inside the bar.
+    @State private var isShowingSettingsCover = false
     @AppStorage("codex.hasSeenOnboarding") private var hasSeenOnboarding = false
     @AppStorage("codex.whatsNew.lastPresentedVersion") private var lastPresentedWhatsNewVersion = ""
 
@@ -239,6 +245,27 @@ struct ContentView: View {
             } message: {
                 Text("Paste the pairing code shown in the terminal on your computer or in your phone shell.")
             }
+            // Settings rides on a full-screen cover instead of `navigationPath`
+            // so the gear tap inside the iOS 26 `safeAreaBar` header always
+            // surfaces a destination, even if push routing is being swallowed
+            // by the Liquid Glass bar chrome.
+            .fullScreenCover(isPresented: $isShowingSettingsCover) {
+                settingsCoverContent
+            }
+    }
+
+    private var settingsCoverContent: some View {
+        NavigationStack {
+            SettingsView()
+                .adaptiveNavigationBar()
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Done") {
+                            isShowingSettingsCover = false
+                        }
+                    }
+                }
+        }
     }
 
     private var rootContentWithBannerOverlay: some View {
@@ -490,9 +517,6 @@ struct ContentView: View {
             },
             onOpenThread: { thread in
                 openThreadFromSidebar(thread)
-            },
-            connectionStatusBadge: {
-                SidebarConnectionStatusBadge(connectionPhase: homeConnectionPhase)
             },
             connectionEmptyStatePanel: {
                 sidebarConnectionEmptyStatePanel
@@ -1013,12 +1037,10 @@ struct ContentView: View {
     }
 
     private func openSettingsFromSidebar() {
-        if shouldPresentSidebarAsNavigation {
-            appendNavigationRoute(.settings)
-        } else {
+        if !shouldPresentSidebarAsNavigation {
             closeSidebar()
-            appendNavigationRoute(.settings)
         }
+        isShowingSettingsCover = true
     }
 
     // Prevents a close-swipe release from also activating whichever sidebar row was under the finger.
