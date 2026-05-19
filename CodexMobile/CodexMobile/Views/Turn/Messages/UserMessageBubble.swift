@@ -2,7 +2,7 @@
 // Purpose: Renders user prompt bubbles, attachment previews, mention chips, and retry/copy actions.
 // Layer: View Component
 // Exports: UserMessageBubble
-// Depends on: SwiftUI, UIKit, UserAttachmentViews, UserBubbleTextBlock
+// Depends on: SwiftUI, UIKit, UserAttachmentViews, UserBubbleTextBlock, UserBubbleInlineMarkdownText
 
 import SwiftUI
 import UIKit
@@ -128,9 +128,11 @@ struct UserMessageBubble: View {
     }
 
     private func userBubbleText(_ rawText: String, bubbleColor: UserBubbleColor) -> some View {
-        Text(rawText)
+        UserBubbleInlineMarkdownText(
+            rawText,
+            foreground: bubbleColor.bubbleForeground(for: colorScheme)
+        )
             .font(AppFont.body())
-            .foregroundStyle(bubbleColor.bubbleForeground(for: colorScheme))
     }
 }
 

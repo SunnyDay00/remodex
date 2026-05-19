@@ -56,7 +56,7 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
     private static var initialVisibleTailCount: Int { 80 }
     /// Heavy-chat staged warmup is temporarily disabled until geometry settles reliably.
     private static var initialWarmTailCount: Int { 0 }
-    private static var scrollToLatestButtonLift: CGFloat { 44 + 18 }
+    private static var scrollToLatestButtonLift: CGFloat { 44 + 8 }
     private static var scrollGeometryCoalescingDelayNanoseconds: UInt64 { 16_000_000 }
 
     @State private var visibleTailCount: Int = initialVisibleTailCount

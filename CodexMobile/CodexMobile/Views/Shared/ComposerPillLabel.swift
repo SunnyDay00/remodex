@@ -26,8 +26,8 @@ struct ComposerPillLabel: View {
         foregroundColor: Color = Color(.secondaryLabel),
         titleFont: Font = AppFont.subheadline(),
         titleWeight: Font.Weight = .regular,
-        iconSize: CGFloat = 12,
-        chevronSize: CGFloat = 7,
+        iconSize: CGFloat = 16,
+        chevronSize: CGFloat = 9,
         showsTrailingChevron: Bool = true
     ) {
         self.title = title
@@ -54,7 +54,7 @@ struct ComposerPillLabel: View {
             }
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 5)
+        .padding(.vertical, 6)
         .adaptiveGlass(.regular, isInteractive: true, in: Capsule())
         .foregroundStyle(foregroundColor)
         .contentShape(Capsule())

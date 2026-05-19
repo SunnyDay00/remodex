@@ -1386,9 +1386,8 @@ extension CodexService {
                     turnId: resolvedTurnId,
                     fileChangePathKeys: incomingPathKeys
                 )
-                if let refreshedIndex = threadMessages.indices.first(where: { threadMessages[$0].id == keepID }) {
-                    threadMessages[refreshedIndex].orderIndex = CodexMessageOrderCounter.next()
-                }
+                // Preserve the row's original timeline slot. The render reducer handles
+                // trailing file-change cards inside their own turn without crossing later users.
                 threadMessages.sort(by: { $0.orderIndex < $1.orderIndex })
                 messagesByThread[threadId] = threadMessages
                 persistMessages()
@@ -2125,11 +2124,8 @@ extension CodexService {
                     }
                 }
                 if let finalIndex = threadMessages.indices.first(where: { threadMessages[$0].id == keepID }) {
-                    if kind == .fileChange {
-                        // File-change cards are intentionally trailed; other activity keeps
-                        // its original slot so late completion refreshes do not jump below the answer.
-                        threadMessages[finalIndex].orderIndex = CodexMessageOrderCounter.next()
-                    }
+                    // Keep refreshed file-change rows anchored to their original turn.
+                    // Intra-turn rendering still trails them after the assistant answer.
                     finalRawIndex = finalIndex
                 }
                 threadMessages.sort(by: { $0.orderIndex < $1.orderIndex })

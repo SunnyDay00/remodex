@@ -43,12 +43,12 @@ struct TurnComposerSecondaryBar: View {
     let onTapCreateWorktree: () -> Void
 
     private let branchLabelColor = Color(.secondaryLabel)
-    private let accessControlSize: CGFloat = 32
+    private let accessControlSize: CGFloat = 36
     // Icona dentro il cerchio access-mode: dimensionata per matchare il rapporto
-    // icon/container dei ComposerPillLabel (~0.5) invece di scalare col font ambient,
+    // icon/container dei ComposerPillLabel (~0.55) invece di scalare col font ambient,
     // altrimenti l'asset central-shield-* (viewBox 24 con padding interno) risulta
     // visibilmente più piccolo delle icone "Local"/"main".
-    private let accessControlIconSize: CGFloat = 16
+    private let accessControlIconSize: CGFloat = 20
     private var branchTextFont: Font { AppFont.subheadline() }
     private var runtimeLabelTitle: String {
         if !hasWorkingDirectory {
