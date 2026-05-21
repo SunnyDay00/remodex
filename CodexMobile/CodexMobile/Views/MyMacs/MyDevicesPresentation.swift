@@ -1,9 +1,8 @@
 // FILE: MyDevicesPresentation.swift
-// Purpose: Shared device naming, status copy, and sort order for sidebar menus
-//          and the devices settings sheet.
+// Purpose: Shared device naming, status copy, and sort order for the
+//          Connections sheet's active-device picker and per-device rows.
 // Layer: View helper
-// Exports: MyDevicesPresentation, MyDeviceRowModel, MyDeviceMenuVisibilityStore,
-//          MyDeviceSwitcherVisibilityStore
+// Exports: MyDevicesPresentation, MyDeviceRowModel, MyDeviceMenuVisibilityStore
 // Depends on: CodexService, SidebarComputerNicknameStore
 
 import Foundation
@@ -28,29 +27,25 @@ struct MyDeviceRowModel: Identifiable {
         }
         .joined(separator: " · ")
     }
-}
 
-enum MyDeviceSwitcherVisibilityMode: String, CaseIterable, Identifiable {
-    case automatic
-    case always
-    case hidden
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .automatic:
-            return "Automatic"
-        case .always:
-            return "Always"
-        case .hidden:
-            return "Hidden"
-        }
+    /// Short label for connection UI where full hostnames feel noisy.
+    var compactDisplayName: String {
+        MyDevicesPresentation.compactDisplayName(primaryName)
     }
 }
 
 enum MyDevicesPresentation {
     static let macIconSystemName = "desktopcomputer"
+
+    static func compactDisplayName(_ rawName: String) -> String {
+        let trimmed = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "Device" }
+
+        if trimmed.lowercased().hasSuffix(".local") {
+            return String(trimmed.dropLast(6))
+        }
+        return trimmed
+    }
 
     static func sortedRecords(from codex: CodexService) -> [CodexTrustedMacRecord] {
         codex.presentationTrustedMacRecords().sorted { lhs, rhs in
@@ -216,23 +211,5 @@ enum MyDeviceMenuVisibilityStore {
             return nil
         }
         return keyPrefix + deviceId
-    }
-}
-
-enum MyDeviceSwitcherVisibilityStore {
-    static let key = "codex.myDevices.switcherVisibilityMode"
-    static let defaultMode = MyDeviceSwitcherVisibilityMode.automatic
-
-    static var mode: MyDeviceSwitcherVisibilityMode {
-        get {
-            guard let rawValue = UserDefaults.standard.string(forKey: key),
-                  let mode = MyDeviceSwitcherVisibilityMode(rawValue: rawValue) else {
-                return defaultMode
-            }
-            return mode
-        }
-        set {
-            UserDefaults.standard.set(newValue.rawValue, forKey: key)
-        }
     }
 }

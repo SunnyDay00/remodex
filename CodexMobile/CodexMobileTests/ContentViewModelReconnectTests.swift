@@ -951,6 +951,9 @@ final class ContentViewModelReconnectTests: XCTestCase {
         let currentMacDeviceID = "mac-current-\(UUID().uuidString)"
         let targetMacDeviceID = "mac-target-\(UUID().uuidString)"
         let relayURL = "wss://relay.local/relay"
+        defer {
+            MyDeviceMenuVisibilityStore.removePreference(for: targetMacDeviceID)
+        }
 
         service.trustedMacRegistry.records[currentMacDeviceID] = CodexTrustedMacRecord(
             macDeviceId: currentMacDeviceID,
@@ -987,7 +990,12 @@ final class ContentViewModelReconnectTests: XCTestCase {
         XCTAssertEqual(service.normalizedRelaySessionId, "old-current-session")
         XCTAssertEqual(service.normalizedRelayMacDeviceId, currentMacDeviceID)
         XCTAssertTrue(service.isConnected)
-        XCTAssertEqual(viewModel.macSwitchNotice, "The selected device is offline.")
+        XCTAssertTrue(MyDeviceMenuVisibilityStore.isVisible(targetMacDeviceID))
+        XCTAssertEqual(
+            viewModel.macSwitchNotice,
+            "That device is not reachable yet. Make sure its bridge is connected, or rescan its QR code."
+        )
+        XCTAssertNil(service.lastErrorMessage)
     }
 
     func testSwitchToScannedMacInterruptsRunningTurnsBeforeConnecting() async {

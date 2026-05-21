@@ -1,32 +1,23 @@
 // FILE: SidebarBottomActionBar.swift
-// Purpose: Bottom-anchored sidebar bar. Hosts (from leading to trailing) the
-//          optional circular devices menu, the Terminal pill, and the primary Chat
-//          pill. Pills are built from the same reusable `SidebarActionPill`
-//          component so they share font, icon size, padding and capsule shape
-//          — only the style differs. The devices menu reuses the sidebar's
-//          shared glass-circle treatment so it reads as a peer of the
-//          Terminal pill. iOS 26 wraps the whole row in `AdaptiveGlassContainer`
-//          so each piece participates in the same Liquid Glass sampling region.
+// Purpose: Bottom-anchored sidebar bar. Hosts the Terminal pill and the primary
+//          Chat pill, built from the shared `SidebarActionPill` component so
+//          they share font, icon size, padding, and capsule shape — only the
+//          style differs. Trusted-device switching now lives entirely inside
+//          the Connections sheet (reached via the sidebar overflow menu), so
+//          the bottom bar no longer carries a devices affordance. iOS 26 wraps
+//          the row in `AdaptiveGlassContainer` so both pills participate in
+//          the same Liquid Glass sampling region.
 // Layer: View Component
 // Exports: SidebarBottomActionBar
-// Depends on: SwiftUI, SidebarActionPill, SidebarDevicesMenuButton,
-//             AdaptiveGlassModifier
+// Depends on: SwiftUI, SidebarActionPill, AdaptiveGlassModifier
 
 import SwiftUI
 
 struct SidebarBottomActionBar: View {
-    @Environment(CodexService.self) private var codex
-    @AppStorage(MyDeviceSwitcherVisibilityStore.key)
-    private var switcherModeRawValue = MyDeviceSwitcherVisibilityStore.defaultMode.rawValue
-
     let isChatEnabled: Bool
     let isCreatingThread: Bool
-    let isSwitchingMac: Bool
-    let switchingMacDeviceId: String?
     let onTapChat: () -> Void
     let onTapTerminal: () -> Void
-    let onSelectTrustedDevice: (String) -> Void
-    let onOpenDevicesSettings: () -> Void
 
     var body: some View {
         Group {
@@ -44,34 +35,6 @@ struct SidebarBottomActionBar: View {
     }
 
     // MARK: - Pills (built from the shared SidebarActionPill component)
-
-    private var devicesMenu: SidebarDevicesMenuButton {
-        SidebarDevicesMenuButton(
-            diameter: pillHeight,
-            isSwitchingMac: isSwitchingMac,
-            switchingMacDeviceId: switchingMacDeviceId,
-            onSelectDevice: onSelectTrustedDevice,
-            onOpenDevicesSettings: onOpenDevicesSettings
-        )
-    }
-
-    private var shouldShowDevicesMenu: Bool {
-        let visibleDeviceCount = MyDevicesPresentation
-            .rowModels(from: codex, switchingDeviceId: switchingMacDeviceId)
-            .filter(\.isVisibleInMenu)
-            .count
-
-        let switcherMode = MyDeviceSwitcherVisibilityMode(rawValue: switcherModeRawValue)
-            ?? MyDeviceSwitcherVisibilityStore.defaultMode
-        switch switcherMode {
-        case .automatic:
-            return isSwitchingMac || visibleDeviceCount > 1
-        case .always:
-            return isSwitchingMac || visibleDeviceCount > 0
-        case .hidden:
-            return isSwitchingMac
-        }
-    }
 
     private var terminalPill: SidebarActionPill {
         SidebarActionPill(
@@ -96,17 +59,12 @@ struct SidebarBottomActionBar: View {
         )
     }
 
-    // Matches the resolved height of the glass `SidebarActionPill`
-    // (icon 20 + vertical padding 12 * 2 ≈ 44) so the circle button sits flush
-    // with the Terminal pill.
-    private var pillHeight: CGFloat { 44 }
-
     // MARK: - Layouts
 
     private var iOS26LiquidGlassLayout: some View {
-        // Groups the devices menu, Terminal and Chat pills in the same native
-        // Liquid Glass sampling region so the glass backgrounds stay
-        // consistent with the surrounding sidebar surface.
+        // Groups Terminal and Chat pills in the same native Liquid Glass
+        // sampling region so the glass backgrounds stay consistent with the
+        // surrounding sidebar surface.
         AdaptiveGlassContainer(spacing: 10) {
             pillRow
         }
@@ -118,9 +76,6 @@ struct SidebarBottomActionBar: View {
 
     private var pillRow: some View {
         HStack(spacing: 10) {
-            if shouldShowDevicesMenu {
-                devicesMenu
-            }
             terminalPill
             Spacer(minLength: 0)
             chatPill
@@ -133,12 +88,8 @@ struct SidebarBottomActionBar: View {
     SidebarBottomActionBar(
         isChatEnabled: true,
         isCreatingThread: false,
-        isSwitchingMac: false,
-        switchingMacDeviceId: nil,
         onTapChat: {},
-        onTapTerminal: {},
-        onSelectTrustedDevice: { _ in },
-        onOpenDevicesSettings: {}
+        onTapTerminal: {}
     )
     .environment(CodexService())
 }

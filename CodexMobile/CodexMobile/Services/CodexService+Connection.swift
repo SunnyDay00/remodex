@@ -154,6 +154,10 @@ extension CodexService {
         isInitialized = false
         isLoadingThreads = false
         isLoadingModels = false
+        pendingRuntimeOptionRefresh = false
+        runtimeOptionRefreshTask?.cancel()
+        runtimeOptionRefreshTask = nil
+        runtimeOptionRefreshToken = nil
         clearPendingApprovals()
         finalizeAllStreamingState()
         messagePersistenceDebounceTask?.cancel()
@@ -533,13 +537,13 @@ extension CodexService {
         }
     }
 
-    // Runs the post-connect sync work that is useful but not required to mark the socket usable.
+    // Paint chats first; runtime metadata is useful composer chrome but must
+    // never block thread sync on bridges where model/list is slow.
     func performPostConnectSyncPass(preferredThreadId: String? = nil) async {
-        // Paint recent chats first; a capped sidebar refresh runs after the shell is usable.
         await syncThreadsList()
-        scheduleRuntimeOptionRefresh()
         if await routePendingNotificationOpenIfPossible(refreshIfNeeded: false) {
             scheduleCompleteThreadListHydration()
+            scheduleRuntimeOptionRefresh()
             return
         }
         let resolvedPreferredThreadId = normalizedInterruptIdentifier(preferredThreadId)
@@ -571,6 +575,7 @@ extension CodexService {
             }
         }
         scheduleCompleteThreadListHydration()
+        scheduleRuntimeOptionRefresh()
     }
 
     // Refreshes capped sidebar metadata without keeping initial reconnect in the loading state.
@@ -581,6 +586,55 @@ extension CodexService {
             }
 
             try? await self.listThreads()
+        }
+    }
+
+    // Keep model/reasoning metadata off the critical reconnect path. Some bridge
+    // runtimes can answer chats while model/list is still slow or unavailable.
+    private func scheduleRuntimeOptionRefresh() {
+        pendingRuntimeOptionRefresh = true
+        flushPendingRuntimeOptionRefreshIfPossible(delayNanoseconds: 1_000_000_000)
+    }
+
+    // Runs a queued runtime metadata refresh once thread hydration is no longer busy.
+    func flushPendingRuntimeOptionRefreshIfPossible(delayNanoseconds: UInt64 = 0) {
+        guard pendingRuntimeOptionRefresh,
+              runtimeOptionRefreshTask == nil,
+              isConnected,
+              isInitialized,
+              !isLoadingThreads else {
+            return
+        }
+
+        pendingRuntimeOptionRefresh = false
+        let refreshToken = UUID()
+        runtimeOptionRefreshToken = refreshToken
+        runtimeOptionRefreshTask = Task { @MainActor [weak self] in
+            if delayNanoseconds > 0 {
+                do {
+                    try await Task.sleep(nanoseconds: delayNanoseconds)
+                } catch {
+                    return
+                }
+            }
+            guard !Task.isCancelled else { return }
+            guard let self else { return }
+            guard self.runtimeOptionRefreshToken == refreshToken else { return }
+            defer {
+                if self.runtimeOptionRefreshToken == refreshToken {
+                    self.runtimeOptionRefreshTask = nil
+                    self.runtimeOptionRefreshToken = nil
+                }
+            }
+            guard self.isConnected, self.isInitialized else { return }
+            guard !self.isLoadingThreads else {
+                self.pendingRuntimeOptionRefresh = true
+                return
+            }
+            try? await self.listModels()
+            if self.runtimeOptionRefreshToken == refreshToken {
+                self.pendingRuntimeOptionRefresh = false
+            }
         }
     }
 
@@ -598,14 +652,6 @@ extension CodexService {
         }
     }
 
-    // Refreshes model/reasoning options in parallel with chat catch-up; the composer has its own loading state.
-    private func scheduleRuntimeOptionRefresh() {
-        Task { @MainActor [weak self] in
-            guard let self, self.isConnected, self.isInitialized else { return }
-            try? await self.listModels()
-        }
-    }
-
     // Clears volatile runtime state on server switch.
     func resetThreadRuntimeStateForServerSwitch() {
         activeThreadId = nil
@@ -617,6 +663,10 @@ extension CodexService {
         currentOutput = ""
         lastErrorMessage = nil
         isLoadingModels = false
+        pendingRuntimeOptionRefresh = false
+        runtimeOptionRefreshTask?.cancel()
+        runtimeOptionRefreshTask = nil
+        runtimeOptionRefreshToken = nil
         modelsErrorMessage = nil
         assistantCompletionFingerprintByThread.removeAll()
         recentActivityLineByThread.removeAll()

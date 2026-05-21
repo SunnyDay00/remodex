@@ -704,6 +704,10 @@ extension ContentViewModel {
                 codex.lastErrorMessage = nil
                 return .fallbackToSaved
             }
+            if isConnectedToDifferentCurrentDevice(codex: codex, targetMacDeviceId: targetMacDeviceId) {
+                macSwitchNotice = "That device is not reachable yet. Make sure its bridge is connected, or rescan its QR code."
+                return .retryLater
+            }
             codex.lastErrorMessage = message
             return .retryLater
         case .rePairRequired(let message):
@@ -742,6 +746,15 @@ extension ContentViewModel {
         return "\(relayURL)/\(sessionId)"
     }
 
+    private func isConnectedToDifferentCurrentDevice(codex: CodexService, targetMacDeviceId: String?) -> Bool {
+        guard codex.isConnected,
+              let currentDeviceId = codex.normalizedCurrentTrustedMacDeviceId,
+              let targetDeviceId = normalizedMacDeviceId(targetMacDeviceId) else {
+            return false
+        }
+        return currentDeviceId != targetDeviceId
+    }
+
     func switchToTrustedMac(deviceId: String, codex: CodexService) async throws {
         let normalizedTargetMacDeviceId = try normalizedRequiredMacDeviceId(deviceId)
         logMacSwitchState("start", targetMacDeviceId: normalizedTargetMacDeviceId, codex: codex)
@@ -775,8 +788,14 @@ extension ContentViewModel {
                 codex: codex,
                 targetMacDeviceId: normalizedTargetMacDeviceId
             ) else {
-                codex.lastErrorMessage = codex.lastErrorMessage ?? "Could not reconnect to the selected device."
-                macSwitchNotice = macSwitchNotice ?? codex.lastErrorMessage
+                let switchFailureMessage = macSwitchNotice
+                    ?? codex.lastErrorMessage
+                    ?? "Could not reconnect to the selected device."
+                macSwitchNotice = switchFailureMessage
+                codex.lastErrorMessage = isConnectedToDifferentCurrentDevice(
+                    codex: codex,
+                    targetMacDeviceId: normalizedTargetMacDeviceId
+                ) ? previousErrorMessage : switchFailureMessage
                 logMacSwitchState("missing-reconnect-url-keeping-current", targetMacDeviceId: normalizedTargetMacDeviceId, codex: codex)
                 throw CodexServiceError.invalidInput("Could not reconnect to the selected device.")
             }
@@ -820,6 +839,7 @@ extension ContentViewModel {
                 serverURLProvider: { fullURL }
             )
             codex.setCurrentTrustedMacDeviceId(effectiveTargetMacDeviceId)
+            macSwitchNotice = nil
             endMacSwitchContext(codex: codex)
             logMacSwitchState("success", targetMacDeviceId: effectiveTargetMacDeviceId, codex: codex)
         } catch is CancellationError {
@@ -845,6 +865,7 @@ extension ContentViewModel {
                     ?? codex.lastErrorMessage
                     ?? previousErrorMessage
                     ?? codex.userFacingConnectFailureMessage(error)
+                codex.lastErrorMessage = previousErrorMessage
                 logMacSwitchState("failed-before-disconnect-kept-current \(macSwitchNotice ?? "")", targetMacDeviceId: normalizedTargetMacDeviceId, codex: codex)
                 throw error
             }

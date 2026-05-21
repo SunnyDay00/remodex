@@ -277,10 +277,11 @@ struct ContentView: View {
                     onSelectDevice: switchToTrustedMac,
                     onForgetDevice: forgetTrustedMac,
                     onAddConnection: presentMyMacsScanner,
+                    onPairWithCode: presentMyMacsPairingCode,
                     onCancelSwitch: cancelMacSwitch
                 )
                 .environment(codex)
-                .presentationDetents([.medium, .large])
+                .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
             }
     }
@@ -327,62 +328,15 @@ struct ContentView: View {
     }
 
     private var deviceSwitchingOverlay: some View {
-        ZStack {
-            Color.black.opacity(0.18)
-                .ignoresSafeArea()
-
-            VStack(spacing: 14) {
-                ProgressView()
-                    .controlSize(.regular)
-
-                Text("Switching Device...")
-                    .font(AppFont.subheadline(weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .multilineTextAlignment(.center)
-
-                if let switchingConnectionPhaseLabel {
-                    Text(switchingConnectionPhaseLabel)
-                        .font(AppFont.caption(weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                }
-
-                if let switchingSecureStatusLabel {
-                    Text(switchingSecureStatusLabel)
-                        .font(AppFont.caption())
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                }
-
-                if let switchingDeviceName {
-                    Text(switchingDeviceName)
-                        .font(AppFont.caption())
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .lineLimit(2)
-                }
-
-                Button(viewModel.isCancellingMacSwitch ? "Cancelling..." : "Cancel") {
-                    cancelMacSwitch()
-                }
-                .font(AppFont.body(weight: .semibold))
-                .foregroundStyle(.primary)
-                .frame(maxWidth: .infinity)
-                .frame(height: 44)
-                .adaptiveGlass(.regular, in: Capsule())
-                .disabled(viewModel.isCancellingMacSwitch)
-            }
-            .frame(width: 236)
-            .padding(18)
-            .adaptiveGlass(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .stroke(Color.primary.opacity(0.06), lineWidth: 1)
-            )
-            .padding(.horizontal, 24)
-        }
-        .transition(.opacity)
-        .zIndex(20)
+        DeviceSwitchingOverlayView(
+            title: "Switching device…",
+            primaryStatus: switchingConnectionPhaseLabel,
+            secondaryStatus: switchingSecureStatusLabel,
+            deviceName: switchingDeviceName,
+            cancelTitle: viewModel.isCancellingMacSwitch ? "Cancelling..." : "Cancel",
+            isCancelDisabled: viewModel.isCancellingMacSwitch,
+            onCancel: cancelMacSwitch
+        )
     }
 
     private var switchingConnectionPhaseLabel: String? {
@@ -650,11 +604,6 @@ struct ContentView: View {
             },
             onOpenThread: { thread in
                 openThreadFromSidebar(thread)
-            },
-            isSwitchingMac: viewModel.isSwitchingMac,
-            switchingMacDeviceId: viewModel.switchingMacDeviceId,
-            onSelectTrustedDevice: { deviceId in
-                switchToTrustedMac(deviceId)
             },
             connectionEmptyStatePanel: {
                 sidebarConnectionEmptyStatePanel
@@ -1741,6 +1690,12 @@ struct ContentView: View {
         presentManualScannerAfterStoppingReconnect()
     }
 
+    private func presentMyMacsPairingCode() {
+        hasDismissedAutomaticScanner = true
+        isShowingMyMacsScanner = true
+        presentManualPairingEntryAfterStoppingReconnect()
+    }
+
     // Re-opens the scanner after the user backed out to the empty state without a saved pairing.
     private func presentAutomaticScanner() {
         withAnimation {
@@ -1860,6 +1815,12 @@ struct ContentView: View {
                     isShowingManualScanner = false
                     hasDismissedAutomaticScanner = true
                     scannerCanReturnToOnboarding = false
+                }
+                if isShowingMyMacsScanner {
+                    isShowingMyMacsScanner = false
+                    prepareForMacContextTransition()
+                    startScannedMacSwitch(pairingPayload)
+                    return
                 }
                 await viewModel.connectToRelay(
                     pairingPayload: pairingPayload,

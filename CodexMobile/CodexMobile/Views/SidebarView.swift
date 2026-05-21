@@ -18,6 +18,10 @@
 //             SidebarBottomActionBar, SidebarSearchField,
 //             SidebarConnectionEmptyStatePanel, SidebarConnectionStatusBadge,
 //             SidebarConnectionEmptyStateFooter
+//
+// Trusted-device switching is now driven entirely from the Connections sheet
+// (reached via the sidebar overflow menu), so this view no longer owns any
+// switcher-specific state or callbacks.
 
 import SwiftUI
 
@@ -37,11 +41,6 @@ struct SidebarView<ConnectionEmptyStatePanel: View, ConnectionEmptyStateFooter: 
     let onOpenNewChatDraft: (NewChatDraftSource, String?) -> Void
     let onNewChatCreationStateChange: (Bool) -> Void
     let onOpenThread: (CodexThread) -> Void
-    // Trusted-device switching context surfaced by the bottom devices menu so
-    // the circle button can disable items mid-switch.
-    let isSwitchingMac: Bool
-    let switchingMacDeviceId: String?
-    let onSelectTrustedDevice: (String) -> Void
     // Centered connect/reconnect card shown when the relay is offline and the
     // sidebar has no cached chats. ContentView owns the underlying connection
     // state and actions; the sidebar just slots the panel into the empty area.
@@ -715,12 +714,8 @@ struct SidebarView<ConnectionEmptyStatePanel: View, ConnectionEmptyStateFooter: 
         SidebarBottomActionBar(
             isChatEnabled: canCreateThread,
             isCreatingThread: isCreatingThread,
-            isSwitchingMac: isSwitchingMac,
-            switchingMacDeviceId: switchingMacDeviceId,
             onTapChat: handleRootlessChatDraftTap,
-            onTapTerminal: openTerminal,
-            onSelectTrustedDevice: onSelectTrustedDevice,
-            onOpenDevicesSettings: onOpenDevicesSettings
+            onTapTerminal: openTerminal
         )
     }
 
