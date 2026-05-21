@@ -54,6 +54,13 @@ nonisolated struct CodexMessagePersistence {
         try? data.write(to: fileURL, options: [.atomic])
     }
 
+    // Removes the scoped timeline cache after a rotated device id has been merged elsewhere.
+    func delete(macDeviceId: String?) {
+        for fileURL in storeURLs(macDeviceId: macDeviceId) {
+            try? FileManager.default.removeItem(at: fileURL)
+        }
+    }
+
     private func storeURL(macDeviceId: String?) -> URL {
         storeURLs(macDeviceId: macDeviceId)[0]
     }

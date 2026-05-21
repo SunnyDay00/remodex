@@ -108,13 +108,13 @@ enum CodexBridgeHostPlatform: String, Codable, Sendable {
     var displayName: String {
         switch self {
         case .macOS:
-            return "Mac"
+            return "Device"
         case .linux:
-            return "Linux computer"
+            return "Linux device"
         case .windows:
-            return "Windows computer"
+            return "Windows device"
         case .unknown:
-            return "computer"
+            return "device"
         }
     }
 }
@@ -379,7 +379,7 @@ extension CodexService {
                 retaining: gptAccountSnapshot
             )
         )
-        gptAccountErrorMessage = "Voice mode needs fresh OpenAI auth on your paired computer."
+        gptAccountErrorMessage = "Voice mode needs fresh OpenAI auth on your paired device."
     }
 
     // Stores an incoming deep-link callback and completes the pending login when the bridge is reachable.
@@ -853,14 +853,14 @@ extension CodexService {
         if let currentVersion = currentVersion?.trimmingCharacters(in: .whitespacesAndNewlines),
            !currentVersion.isEmpty {
             message =
-                "This computer bridge is running Remodex \(currentVersion), but this iPhone app requires Remodex \(CodexService.minimumSupportedBridgePackageVersion) or newer. Update the npm package on your computer, then reconnect."
+                "This device bridge is running Remodex \(currentVersion), but this iPhone app requires Remodex \(CodexService.minimumSupportedBridgePackageVersion) or newer. Update the npm package on your device, then reconnect."
         } else {
             message =
-                "This computer bridge is too old for this version of Remodex iPhone. Update the Remodex npm package on your computer to \(CodexService.minimumSupportedBridgePackageVersion) or newer, then reconnect."
+                "This device bridge is too old for this version of Remodex iPhone. Update the Remodex npm package on your device to \(CodexService.minimumSupportedBridgePackageVersion) or newer, then reconnect."
         }
 
         return CodexBridgeUpdatePrompt(
-            title: "Update Remodex on your computer to reconnect",
+            title: "Update Remodex on your device to reconnect",
             message: message,
             command: minimumBridgePackageUpdateCommand
         )
@@ -921,16 +921,16 @@ extension CodexService {
         latestVersion: String
     ) -> CodexBridgeUpdatePrompt {
         CodexBridgeUpdatePrompt(
-            title: "A newer Remodex update is available on your computer",
-            message: "This computer bridge is running Remodex \(currentVersion), and npm now has Remodex \(latestVersion). Update the package on your computer when you're ready, then reconnect to start using the newer build.",
+            title: "A newer Remodex update is available on your device",
+            message: "This device bridge is running Remodex \(currentVersion), and npm now has Remodex \(latestVersion). Update the package on your device when you're ready, then reconnect to start using the newer build.",
             command: minimumBridgePackageUpdateCommand
         )
     }
 
     private func forcedBridgePackageUpdatePrompt(currentVersion: String) -> CodexBridgeUpdatePrompt {
         CodexBridgeUpdatePrompt(
-            title: "Update Remodex on your computer to reconnect",
-            message: "This computer bridge is running Remodex \(currentVersion). Update the Remodex CLI on your computer to \(forcedBridgeUpgradeTargetVersion), then reconnect.",
+            title: "Update Remodex on your device to reconnect",
+            message: "This device bridge is running Remodex \(currentVersion). Update the Remodex CLI on your device to \(forcedBridgeUpgradeTargetVersion), then reconnect.",
             command: forcedBridgeUpgradeCommand
         )
     }

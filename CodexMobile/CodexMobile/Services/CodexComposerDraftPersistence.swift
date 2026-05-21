@@ -43,6 +43,13 @@ nonisolated struct CodexComposerDraftPersistence {
         try? data.write(to: fileURL, options: [.atomic])
     }
 
+    // Removes the scoped draft cache after a rotated device id has been merged elsewhere.
+    func delete(macDeviceId: String?) {
+        for fileURL in storeURLs(macDeviceId: macDeviceId) {
+            try? FileManager.default.removeItem(at: fileURL)
+        }
+    }
+
     private func storeURL(macDeviceId: String?) -> URL {
         storeURLs(macDeviceId: macDeviceId)[0]
     }

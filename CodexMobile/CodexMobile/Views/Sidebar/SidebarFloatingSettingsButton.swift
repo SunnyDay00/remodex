@@ -45,8 +45,8 @@ struct SidebarFloatingMacsButton: View {
     var body: some View {
         SidebarFloatingCircleButton(
             colorScheme: colorScheme,
-            systemImage: "desktopcomputer",
-            accessibilityLabel: "My Macs",
+            systemImage: "laptopcomputer",
+            accessibilityLabel: "My Devices",
             action: action
         )
     }
@@ -93,6 +93,6 @@ struct SidebarComputerConnectionStatusView: View {
     }
 
     private var statusTitle: String {
-        isConnected ? "Connected to Computer" : "Saved Computer"
+        isConnected ? "Connected to Device" : "Saved Device"
     }
 }

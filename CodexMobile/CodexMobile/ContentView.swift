@@ -26,7 +26,6 @@ enum ContentNavigationRoute: Hashable {
     case newChatOpening
     case thread(id: String)
     case settings
-    case myMacs
     case terminal(preferredWorkingDirectory: String?)
 }
 
@@ -77,6 +76,7 @@ struct ContentView: View {
     // chrome can interfere with navigation-stack pushes from buttons nested
     // inside the bar.
     @State private var isShowingSettingsCover = false
+    @State private var isShowingDevicesSettingsSheet = false
     @AppStorage("codex.hasSeenOnboarding") private var hasSeenOnboarding = false
     @AppStorage("codex.whatsNew.lastPresentedVersion") private var lastPresentedWhatsNewVersion = ""
 
@@ -253,7 +253,7 @@ struct ContentView: View {
                     manualPairingCode = ""
                 }
             } message: {
-                Text("Paste the pairing code shown in the terminal on your computer or in your phone shell.")
+                Text("Paste the pairing code shown in the terminal on your device or in your phone shell.")
             }
             // Settings rides on a full-screen cover instead of `navigationPath`
             // so the gear tap inside the iOS 26 `safeAreaBar` header always
@@ -261,6 +261,20 @@ struct ContentView: View {
             // by the Liquid Glass bar chrome.
             .fullScreenCover(isPresented: $isShowingSettingsCover) {
                 settingsCoverContent
+            }
+            .sheet(isPresented: $isShowingDevicesSettingsSheet) {
+                MyDevicesSettingsSheet(
+                    isSwitchingMac: viewModel.isSwitchingMac,
+                    switchingDeviceId: viewModel.switchingMacDeviceId,
+                    switchNotice: viewModel.macSwitchNotice,
+                    onSelectDevice: switchToTrustedMac,
+                    onForgetDevice: forgetTrustedMac,
+                    onAddConnection: presentMyMacsScanner,
+                    onCancelSwitch: cancelMacSwitch
+                )
+                .environment(codex)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
             }
     }
 
@@ -280,6 +294,11 @@ struct ContentView: View {
 
     private var rootContentWithBannerOverlay: some View {
         rootContentWithPresentations
+            .overlay {
+                if viewModel.isSwitchingMac {
+                    deviceSwitchingOverlay
+                }
+            }
             .overlay(alignment: .top) {
                 if let banner = codex.threadCompletionBanner {
                     ThreadCompletionBannerView(
@@ -297,6 +316,88 @@ struct ContentView: View {
                 }
             }
             .animation(.spring(response: 0.35, dampingFraction: 0.88), value: codex.threadCompletionBanner?.id)
+            .animation(.easeInOut(duration: 0.18), value: viewModel.isSwitchingMac)
+    }
+
+    private var deviceSwitchingOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.18)
+                .ignoresSafeArea()
+
+            VStack(spacing: 14) {
+                ProgressView()
+                    .controlSize(.regular)
+
+                Text("Switching Device...")
+                    .font(AppFont.subheadline(weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .multilineTextAlignment(.center)
+
+                if let switchingConnectionPhaseLabel {
+                    Text(switchingConnectionPhaseLabel)
+                        .font(AppFont.caption(weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+
+                if let switchingSecureStatusLabel {
+                    Text(switchingSecureStatusLabel)
+                        .font(AppFont.caption())
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+
+                if let switchingDeviceName {
+                    Text(switchingDeviceName)
+                        .font(AppFont.caption())
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .lineLimit(2)
+                }
+
+                Button(viewModel.isCancellingMacSwitch ? "Cancelling..." : "Cancel") {
+                    cancelMacSwitch()
+                }
+                .font(AppFont.body(weight: .semibold))
+                .foregroundStyle(.primary)
+                .frame(maxWidth: .infinity)
+                .frame(height: 44)
+                .adaptiveGlass(.regular, in: Capsule())
+                .disabled(viewModel.isCancellingMacSwitch)
+            }
+            .frame(width: 236)
+            .padding(18)
+            .adaptiveGlass(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+            )
+            .padding(.horizontal, 24)
+        }
+        .transition(.opacity)
+        .zIndex(20)
+    }
+
+    private var switchingConnectionPhaseLabel: String? {
+        let label = codex.connectionPhaseDisplayLabel
+        return label == "Offline" ? nil : label
+    }
+
+    private var switchingSecureStatusLabel: String? {
+        codex.secureConnectionDisplayLabel
+    }
+
+    private var switchingDeviceName: String? {
+        guard let switchingMacDeviceId = viewModel.switchingMacDeviceId,
+              let trustedMac = codex.trustedMacRecord(for: switchingMacDeviceId) else {
+            return nil
+        }
+
+        return MyDevicesPresentation.rowModel(
+            for: trustedMac,
+            codex: codex,
+            switchingDeviceId: switchingMacDeviceId
+        ).primaryName
     }
 
     @ViewBuilder
@@ -507,18 +608,6 @@ struct ContentView: View {
         case .settings:
             SettingsView()
                 .adaptiveNavigationBar()
-        case .myMacs:
-            MyMacsView(
-                onScanQRCode: presentMyMacsScanner,
-                onSwitchMac: switchToTrustedMac,
-                onForgetMac: forgetTrustedMac,
-                onCancelSwitch: cancelMacSwitch,
-                isSwitchingMac: viewModel.isSwitchingMac,
-                isCancellingMacSwitch: viewModel.isCancellingMacSwitch,
-                switchingMacDeviceId: viewModel.switchingMacDeviceId,
-                switchNotice: viewModel.macSwitchNotice
-            )
-            .adaptiveNavigationBar()
         case .terminal(let preferredWorkingDirectory):
             TerminalScreen(preferredWorkingDirectory: preferredWorkingDirectory)
                 .adaptiveNavigationBar()
@@ -540,8 +629,8 @@ struct ContentView: View {
             onOpenSettings: {
                 openSettingsFromSidebar()
             },
-            onOpenMyMacs: {
-                openMyMacsFromSidebar()
+            onOpenDevicesSettings: {
+                openDevicesSettingsFromSidebar()
             },
             onOpenTerminal: {
                 openTerminalFromSidebar(preferredWorkingDirectory: nil)
@@ -554,6 +643,11 @@ struct ContentView: View {
             },
             onOpenThread: { thread in
                 openThreadFromSidebar(thread)
+            },
+            isSwitchingMac: viewModel.isSwitchingMac,
+            switchingMacDeviceId: viewModel.switchingMacDeviceId,
+            onSelectTrustedDevice: { deviceId in
+                switchToTrustedMac(deviceId)
             },
             connectionEmptyStatePanel: {
                 sidebarConnectionEmptyStatePanel
@@ -1160,15 +1254,11 @@ struct ContentView: View {
         isShowingSettingsCover = true
     }
 
-    private func openMyMacsFromSidebar() {
-        hasDismissedAutomaticScanner = true
-        let route = ContentNavigationRoute.myMacs
-        if shouldPresentSidebarAsNavigation {
-            appendNavigationRoute(route)
-        } else {
+    private func openDevicesSettingsFromSidebar() {
+        if !shouldPresentSidebarAsNavigation {
             closeSidebar()
-            appendNavigationRoute(route)
         }
+        isShowingDevicesSettingsSheet = true
     }
 
     // Prevents a close-swipe release from also activating whichever sidebar row was under the finger.

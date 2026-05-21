@@ -303,6 +303,108 @@ extension CodexService {
         migrateLegacyMacScopedDefaultsValue(for: Self.gptPendingLoginStateDefaultsKey)
         migrateLegacyMacScopedDefaultsValue(for: Self.gptPendingLoginCallbackDefaultsKey)
     }
+
+    // Moves local state saved under rotated bridge ids onto the freshly trusted device id.
+    @discardableResult
+    func migrateMacScopedState(from oldMacDeviceIds: [String], to newMacDeviceId: String) -> Bool {
+        guard let targetDeviceId = normalizedMacScopedDeviceId(newMacDeviceId) else {
+            return false
+        }
+
+        let sourceDeviceIds = uniqueNormalizedMacDeviceIds(oldMacDeviceIds)
+            .filter { $0 != targetDeviceId }
+        guard !sourceDeviceIds.isEmpty else {
+            return false
+        }
+
+        var migratedDefaults = false
+        migratedDefaults = migrateMacScopedLocalCaches(
+            from: sourceDeviceIds,
+            to: targetDeviceId
+        ) || migratedDefaults
+        migratedDefaults = mergeMacScopedDefaultsDataDictionary(
+            Self.threadRuntimeOverridesDefaultsKey,
+            from: sourceDeviceIds,
+            to: targetDeviceId,
+            as: [String: CodexThreadRuntimeOverride].self
+        ) || migratedDefaults
+        migratedDefaults = mergeMacScopedDefaultsDataDictionary(
+            Self.planSessionSourcesDefaultsKey,
+            from: sourceDeviceIds,
+            to: targetDeviceId,
+            as: [String: CodexPlanSessionSource].self
+        ) || migratedDefaults
+        migratedDefaults = mergeMacScopedDefaultsDataDictionary(
+            Self.forkedThreadOriginsDefaultsKey,
+            from: sourceDeviceIds,
+            to: targetDeviceId,
+            as: [String: String].self
+        ) || migratedDefaults
+        migratedDefaults = mergeMacScopedDefaultsDataDictionary(
+            Self.renamedThreadNamesDefaultsKey,
+            from: sourceDeviceIds,
+            to: targetDeviceId,
+            as: [String: String].self
+        ) || migratedDefaults
+        migratedDefaults = mergeMacScopedDefaultsDataDictionary(
+            Self.pinnedThreadSnapshotsDefaultsKey,
+            from: sourceDeviceIds,
+            to: targetDeviceId,
+            as: [String: [CodexThread]].self
+        ) || migratedDefaults
+        migratedDefaults = mergeMacScopedDefaultsDataDictionary(
+            Self.associatedManagedWorktreePathsDefaultsKey,
+            from: sourceDeviceIds,
+            to: targetDeviceId,
+            as: [String: String].self
+        ) || migratedDefaults
+        migratedDefaults = mergeMacScopedDefaultsDataDictionary(
+            Self.turnTerminalStatesDefaultsKey,
+            from: sourceDeviceIds,
+            to: targetDeviceId,
+            as: [String: CodexTurnTerminalState].self
+        ) || migratedDefaults
+        migratedDefaults = mergeMacScopedDefaultsDataDictionary(
+            Self.threadHistoryPaginationStateDefaultsKey,
+            from: sourceDeviceIds,
+            to: targetDeviceId,
+            as: [String: CodexThreadHistoryPaginationState].self
+        ) || migratedDefaults
+
+        migratedDefaults = mergeMacScopedDefaultsStringList(
+            Self.locallyArchivedThreadIDsKey,
+            from: sourceDeviceIds,
+            to: targetDeviceId
+        ) || migratedDefaults
+        migratedDefaults = mergeMacScopedDefaultsStringList(
+            Self.locallyDeletedThreadIDsKey,
+            from: sourceDeviceIds,
+            to: targetDeviceId
+        ) || migratedDefaults
+        migratedDefaults = mergeMacScopedDefaultsDataList(
+            Self.pinnedThreadIDsDefaultsKey,
+            from: sourceDeviceIds,
+            to: targetDeviceId
+        ) || migratedDefaults
+
+        migratedDefaults = migrateMacScopedOpaqueDefault(
+            Self.gptAccountSnapshotDefaultsKey,
+            from: sourceDeviceIds,
+            to: targetDeviceId
+        ) || migratedDefaults
+        migratedDefaults = migrateMacScopedOpaqueDefault(
+            Self.gptPendingLoginStateDefaultsKey,
+            from: sourceDeviceIds,
+            to: targetDeviceId
+        ) || migratedDefaults
+        migratedDefaults = migrateMacScopedOpaqueDefault(
+            Self.gptPendingLoginCallbackDefaultsKey,
+            from: sourceDeviceIds,
+            to: targetDeviceId
+        ) || migratedDefaults
+
+        return migratedDefaults
+    }
 }
 
 private extension CodexService {
@@ -342,6 +444,243 @@ private extension CodexService {
         }
 
         defaults.removeObject(forKey: baseKey)
+    }
+
+    func uniqueNormalizedMacDeviceIds(_ macDeviceIds: [String]) -> [String] {
+        var seen: Set<String> = []
+        var normalizedDeviceIds: [String] = []
+
+        for macDeviceId in macDeviceIds {
+            guard let normalizedDeviceId = normalizedMacScopedDeviceId(macDeviceId),
+                  !seen.contains(normalizedDeviceId) else {
+                continue
+            }
+
+            seen.insert(normalizedDeviceId)
+            normalizedDeviceIds.append(normalizedDeviceId)
+        }
+
+        return normalizedDeviceIds
+    }
+
+    func migrateMacScopedLocalCaches(from sourceDeviceIds: [String], to targetDeviceId: String) -> Bool {
+        var migratedCaches = false
+
+        migratedCaches = mergeMacScopedMessages(from: sourceDeviceIds, to: targetDeviceId) || migratedCaches
+        migratedCaches = mergeMacScopedComposerDrafts(from: sourceDeviceIds, to: targetDeviceId) || migratedCaches
+        migratedCaches = mergeMacScopedChangeSets(from: sourceDeviceIds, to: targetDeviceId) || migratedCaches
+
+        return migratedCaches
+    }
+
+    func mergeMacScopedMessages(from sourceDeviceIds: [String], to targetDeviceId: String) -> Bool {
+        var targetMessages = messagePersistence.load(macDeviceId: targetDeviceId)
+        var changed = false
+
+        for sourceDeviceId in sourceDeviceIds {
+            defer { messagePersistence.delete(macDeviceId: sourceDeviceId) }
+            let sourceMessages = messagePersistence.load(macDeviceId: sourceDeviceId)
+            for (threadId, messages) in sourceMessages where targetMessages[threadId] == nil {
+                targetMessages[threadId] = messages
+                changed = true
+            }
+        }
+
+        guard changed else {
+            return false
+        }
+
+        messagePersistence.save(targetMessages, macDeviceId: targetDeviceId)
+        return true
+    }
+
+    func mergeMacScopedComposerDrafts(from sourceDeviceIds: [String], to targetDeviceId: String) -> Bool {
+        var targetDrafts = composerDraftPersistence.load(macDeviceId: targetDeviceId)
+        var changed = false
+
+        for sourceDeviceId in sourceDeviceIds {
+            defer { composerDraftPersistence.delete(macDeviceId: sourceDeviceId) }
+            let sourceDrafts = composerDraftPersistence.load(macDeviceId: sourceDeviceId)
+            for (threadId, draft) in sourceDrafts where targetDrafts[threadId] == nil {
+                targetDrafts[threadId] = draft
+                changed = true
+            }
+        }
+
+        guard changed else {
+            return false
+        }
+
+        composerDraftPersistence.save(targetDrafts, macDeviceId: targetDeviceId)
+        return true
+    }
+
+    func mergeMacScopedChangeSets(from sourceDeviceIds: [String], to targetDeviceId: String) -> Bool {
+        var targetChangeSetsById = aiChangeSetPersistence.load(macDeviceId: targetDeviceId)
+            .reduce(into: [String: AIChangeSet]()) { partialResult, changeSet in
+                partialResult[changeSet.id] = changeSet
+            }
+        var changed = false
+
+        for sourceDeviceId in sourceDeviceIds {
+            defer { aiChangeSetPersistence.delete(macDeviceId: sourceDeviceId) }
+            for changeSet in aiChangeSetPersistence.load(macDeviceId: sourceDeviceId)
+                where targetChangeSetsById[changeSet.id] == nil {
+                targetChangeSetsById[changeSet.id] = changeSet
+                changed = true
+            }
+        }
+
+        guard changed else {
+            return false
+        }
+
+        aiChangeSetPersistence.save(Array(targetChangeSetsById.values), macDeviceId: targetDeviceId)
+        return true
+    }
+
+    // Target values win so a current device's fresh settings are not overwritten by stale ids.
+    func mergeMacScopedDefaultsDataDictionary<Value: Codable>(
+        _ baseKey: String,
+        from sourceDeviceIds: [String],
+        to targetDeviceId: String,
+        as _: [String: Value].Type
+    ) -> Bool {
+        let targetKey = macScopedDefaultsKey(baseKey, macDeviceId: targetDeviceId)
+        var targetValue = decodedMacScopedDefaultsDataDictionary(baseKey, macDeviceId: targetDeviceId, as: [String: Value].self)
+        var changed = false
+
+        for sourceDeviceId in sourceDeviceIds {
+            let sourceKey = macScopedDefaultsKey(baseKey, macDeviceId: sourceDeviceId)
+            defer { defaults.removeObject(forKey: sourceKey) }
+
+            guard let sourceValue = decodedMacScopedDefaultsDataDictionary(
+                baseKey,
+                macDeviceId: sourceDeviceId,
+                as: [String: Value].self
+            ) else {
+                changed = migrateMacScopedOpaqueDefaultIfEmpty(fromKey: sourceKey, toKey: targetKey) || changed
+                continue
+            }
+
+            if targetValue == nil {
+                targetValue = [:]
+            }
+
+            for (key, value) in sourceValue where targetValue?[key] == nil {
+                targetValue?[key] = value
+                changed = true
+            }
+        }
+
+        guard changed, let targetValue, let encoded = try? encoder.encode(targetValue) else {
+            return changed
+        }
+
+        defaults.set(encoded, forKey: targetKey)
+        return true
+    }
+
+    func decodedMacScopedDefaultsDataDictionary<Value: Codable>(
+        _ baseKey: String,
+        macDeviceId: String,
+        as _: [String: Value].Type
+    ) -> [String: Value]? {
+        guard let data = defaults.data(forKey: macScopedDefaultsKey(baseKey, macDeviceId: macDeviceId)) else {
+            return nil
+        }
+
+        return try? decoder.decode([String: Value].self, from: data)
+    }
+
+    func mergeMacScopedDefaultsStringList(
+        _ baseKey: String,
+        from sourceDeviceIds: [String],
+        to targetDeviceId: String
+    ) -> Bool {
+        let targetKey = macScopedDefaultsKey(baseKey, macDeviceId: targetDeviceId)
+        var mergedValues = defaults.stringArray(forKey: targetKey) ?? []
+        var seenValues = Set(mergedValues)
+        var changed = false
+
+        for sourceDeviceId in sourceDeviceIds {
+            let sourceKey = macScopedDefaultsKey(baseKey, macDeviceId: sourceDeviceId)
+            defer { defaults.removeObject(forKey: sourceKey) }
+
+            for value in defaults.stringArray(forKey: sourceKey) ?? [] where !seenValues.contains(value) {
+                seenValues.insert(value)
+                mergedValues.append(value)
+                changed = true
+            }
+        }
+
+        guard changed else {
+            return false
+        }
+
+        defaults.set(mergedValues, forKey: targetKey)
+        return true
+    }
+
+    func mergeMacScopedDefaultsDataList(_ baseKey: String, from sourceDeviceIds: [String], to targetDeviceId: String) -> Bool {
+        let targetKey = macScopedDefaultsKey(baseKey, macDeviceId: targetDeviceId)
+        var mergedValues = decodedMacScopedDefaultsDataList(baseKey, macDeviceId: targetDeviceId) ?? []
+        var seenValues = Set(mergedValues)
+        var changed = false
+
+        for sourceDeviceId in sourceDeviceIds {
+            let sourceKey = macScopedDefaultsKey(baseKey, macDeviceId: sourceDeviceId)
+            defer { defaults.removeObject(forKey: sourceKey) }
+
+            guard let sourceValues = decodedMacScopedDefaultsDataList(baseKey, macDeviceId: sourceDeviceId) else {
+                changed = migrateMacScopedOpaqueDefaultIfEmpty(fromKey: sourceKey, toKey: targetKey) || changed
+                continue
+            }
+
+            for value in sourceValues where !seenValues.contains(value) {
+                seenValues.insert(value)
+                mergedValues.append(value)
+                changed = true
+            }
+        }
+
+        guard changed, let encoded = try? encoder.encode(mergedValues) else {
+            return changed
+        }
+
+        defaults.set(encoded, forKey: targetKey)
+        return true
+    }
+
+    func decodedMacScopedDefaultsDataList(_ baseKey: String, macDeviceId: String) -> [String]? {
+        guard let data = defaults.data(forKey: macScopedDefaultsKey(baseKey, macDeviceId: macDeviceId)) else {
+            return nil
+        }
+
+        return try? decoder.decode([String].self, from: data)
+    }
+
+    func migrateMacScopedOpaqueDefault(_ baseKey: String, from sourceDeviceIds: [String], to targetDeviceId: String) -> Bool {
+        let targetKey = macScopedDefaultsKey(baseKey, macDeviceId: targetDeviceId)
+        var changed = false
+
+        for sourceDeviceId in sourceDeviceIds {
+            let sourceKey = macScopedDefaultsKey(baseKey, macDeviceId: sourceDeviceId)
+            changed = migrateMacScopedOpaqueDefaultIfEmpty(fromKey: sourceKey, toKey: targetKey) || changed
+            defaults.removeObject(forKey: sourceKey)
+        }
+
+        return changed
+    }
+
+    func migrateMacScopedOpaqueDefaultIfEmpty(fromKey sourceKey: String, toKey targetKey: String) -> Bool {
+        guard defaults.object(forKey: targetKey) == nil,
+              let sourceValue = defaults.object(forKey: sourceKey) else {
+            return false
+        }
+
+        defaults.set(sourceValue, forKey: targetKey)
+        return true
     }
 
     func normalizedMacScopedDeviceId(_ macDeviceId: String?) -> String? {

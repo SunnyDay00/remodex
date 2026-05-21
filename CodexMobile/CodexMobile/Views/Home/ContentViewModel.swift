@@ -2,8 +2,9 @@
 // Purpose: Owns non-visual orchestration logic for the root screen (connection, relay pairing, sync throttling).
 // Layer: ViewModel
 // Exports: ContentViewModel
-// Depends on: Foundation, Observation, CodexService, SecureStore
+// Depends on: CryptoKit, Foundation, Observation, CodexService, SecureStore
 
+import CryptoKit
 import Foundation
 import Observation
 
@@ -21,6 +22,7 @@ final class ContentViewModel {
     private(set) var switchingMacDeviceId: String?
     private(set) var macSwitchNotice: String?
     private var shouldCancelManualReconnect = false
+    private let macSwitchInterruptTimeoutNanoseconds: UInt64 = 1_500_000_000
     // Test hooks keep reconnect verification fast without changing production retry behavior.
     @ObservationIgnored var reconnectAttemptLimitOverride: Int?
     @ObservationIgnored var connectOverride: ((CodexService, String) async throws -> Void)?
@@ -290,6 +292,8 @@ final class ContentViewModel {
     }
 }
 
+private struct MacSwitchInterruptTimeout: Error {}
+
 extension ContentViewModel {
     private enum ReconnectURLResolution {
         case use(String)
@@ -455,32 +459,72 @@ extension ContentViewModel {
         codex: CodexService,
         targetMacDeviceId: String?
     ) async -> ReconnectURLResolution {
-        guard let targetMacDeviceId = normalizedMacDeviceId(targetMacDeviceId),
+        let normalizedTargetMacDeviceId = normalizedMacDeviceId(targetMacDeviceId)
+        guard let targetMacDeviceId = normalizedTargetMacDeviceId,
               let trustedMac = codex.trustedMacRecord(for: targetMacDeviceId),
               trustedMac.relayURL?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+            logMacSwitchState("resolve-skip-no-trusted-target", targetMacDeviceId: normalizedTargetMacDeviceId, codex: codex)
             return .fallbackToSaved
         }
 
         do {
+            logMacSwitchState("resolve-start", targetMacDeviceId: targetMacDeviceId, codex: codex)
             guard let trustedReconnectURL = try await resolvedTrustedReconnectURL(
                 codex: codex,
                 targetMacDeviceId: targetMacDeviceId
             ) else {
+                logMacSwitchState("resolve-empty", targetMacDeviceId: targetMacDeviceId, codex: codex)
                 return .fallbackToSaved
             }
+            logMacSwitchState("resolve-use-live-session", targetMacDeviceId: targetMacDeviceId, codex: codex)
             return .use(trustedReconnectURL)
         } catch let error as CodexTrustedSessionResolveError {
+            logMacSwitchState(
+                "resolve-error \(String(describing: error))",
+                targetMacDeviceId: targetMacDeviceId,
+                codex: codex
+            )
+            if case .macOffline = error,
+               let alternate = await resolvedAlternateTrustedReconnectURL(
+                    codex: codex,
+                    offlineTrustedMac: trustedMac
+               ) {
+                logMacSwitchState(
+                    "resolve-use-alternate-live-record from=\(redactedMacSwitchIdentifier(targetMacDeviceId))",
+                    targetMacDeviceId: alternate.macDeviceId,
+                    codex: codex
+                )
+                return .use(alternate.url)
+            }
+            if case .macOffline = error {
+                let prunedCount = codex.pruneOfflineTrustedMacRecords(matching: trustedMac)
+                logMacSwitchState(
+                    "pruned-offline-selection count=\(prunedCount)",
+                    targetMacDeviceId: targetMacDeviceId,
+                    codex: codex
+                )
+                if prunedCount > 0 {
+                    macSwitchNotice = "Removed old saved entries for that device. Scan its QR code once if it is still missing."
+                }
+            }
             return trustedReconnectResolution(
                 for: error,
                 codex: codex,
                 targetMacDeviceId: targetMacDeviceId
             )
         } catch is CancellationError {
+            logMacSwitchState("resolve-cancelled", targetMacDeviceId: targetMacDeviceId, codex: codex)
             return .stop
         } catch {
             if savedReconnectURL(codex: codex, targetMacDeviceId: targetMacDeviceId) == nil {
                 codex.lastErrorMessage = codex.userFacingTurnErrorMessageForFooter(from: error)
             }
+            let message = codex.userFacingTurnErrorMessageForFooter(from: error) ?? String(describing: error)
+            logMacSwitchState(
+                "resolve-unexpected-error \(message)",
+                targetMacDeviceId: targetMacDeviceId,
+                codex: codex
+            )
             return .fallbackToSaved
         }
     }
@@ -496,7 +540,84 @@ extension ContentViewModel {
               !relayURL.isEmpty else {
             return nil
         }
+        try validateResolvedTrustedReconnectTarget(resolved, trustedMac: trustedMac)
         return "\(relayURL)/\(resolved.sessionId)"
+    }
+
+    // Recovers from stale duplicate records by trying only records with the same stable Mac key.
+    private func resolvedAlternateTrustedReconnectURL(
+        codex: CodexService,
+        offlineTrustedMac: CodexTrustedMacRecord
+    ) async -> (url: String, macDeviceId: String)? {
+        let candidates = alternateTrustedMacCandidates(
+            for: offlineTrustedMac,
+            codex: codex
+        )
+        for candidate in candidates {
+            do {
+                guard let url = try await resolvedTrustedReconnectURL(
+                    codex: codex,
+                    targetMacDeviceId: candidate.macDeviceId
+                ) else {
+                    continue
+                }
+                codex.setCurrentTrustedMacDeviceId(candidate.macDeviceId)
+                return (url, candidate.macDeviceId)
+            } catch {
+                logMacSwitchState(
+                    "resolve-alternate-failed \(String(describing: error))",
+                    targetMacDeviceId: candidate.macDeviceId,
+                    codex: codex
+                )
+                continue
+            }
+        }
+        return nil
+    }
+
+    private func alternateTrustedMacCandidates(
+        for trustedMac: CodexTrustedMacRecord,
+        codex: CodexService
+    ) -> [CodexTrustedMacRecord] {
+        let trustedPublicKey = trustedMac.macIdentityPublicKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trustedPublicKey.isEmpty else {
+            return []
+        }
+
+        return codex.trustedMacRegistry.records.values
+            .filter { candidate in
+                let candidatePublicKey = candidate.macIdentityPublicKey.trimmingCharacters(in: .whitespacesAndNewlines)
+                return candidate.macDeviceId != trustedMac.macDeviceId
+                    && candidatePublicKey == trustedPublicKey
+                    && candidate.relayURL?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            }
+            .sorted { lhs, rhs in
+                trustedMacActivityDate(lhs) > trustedMacActivityDate(rhs)
+            }
+    }
+
+    private func trustedMacActivityDate(_ trustedMac: CodexTrustedMacRecord) -> Date {
+        trustedMac.lastResolvedAt ?? trustedMac.lastUsedAt ?? trustedMac.lastPairedAt
+    }
+
+    // Test overrides and relay responses must not silently retarget a manual Mac switch.
+    private func validateResolvedTrustedReconnectTarget(
+        _ resolved: CodexTrustedSessionResolveResponse,
+        trustedMac: CodexTrustedMacRecord
+    ) throws {
+        guard resolved.macDeviceId == trustedMac.macDeviceId else {
+            throw CodexTrustedSessionResolveError.invalidResponse(
+                "The trusted device relay returned a session for a different device."
+            )
+        }
+
+        let resolvedPublicKey = resolved.macIdentityPublicKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trustedPublicKey = trustedMac.macIdentityPublicKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !resolvedPublicKey.isEmpty, resolvedPublicKey == trustedPublicKey else {
+            throw CodexTrustedSessionResolveError.invalidResponse(
+                "The trusted device relay returned a different device identity key."
+            )
+        }
     }
 
     // Applies trusted-resolve error policy without mixing it into the happy path URL assembly.
@@ -512,7 +633,7 @@ extension ContentViewModel {
                 codex.secureConnectionState = .liveSessionUnresolved
                 codex.connectionRecoveryState = .idle
                 codex.shouldAutoReconnectOnForeground = false
-                codex.lastErrorMessage = "Trusted reconnect is unavailable from this relay endpoint. Update or check the relay/proxy, then reconnect. Scan a new QR code only if this Mac was reset."
+                codex.lastErrorMessage = "Trusted reconnect is unavailable from this relay endpoint. Update or check the relay/proxy, then reconnect. Scan a new QR code only if this device was reset."
                 return .stop
             }
             return .fallbackToSaved
@@ -525,8 +646,8 @@ extension ContentViewModel {
             codex.lastErrorMessage = message
             return .stop
         case .rePairRequired(let message):
-            if codex.hasSavedRelaySession {
-                // Trusted-session lookup is only a shortcut; the saved socket handshake is the authority.
+            if hasSavedReconnectURL {
+                // Trusted-session lookup is only a shortcut; the target-matched saved socket handshake is the authority.
                 codex.restoreTrustedPairPresentationState()
                 codex.lastErrorMessage = nil
                 return .fallbackToSaved
@@ -562,10 +683,13 @@ extension ContentViewModel {
 
     func switchToTrustedMac(deviceId: String, codex: CodexService) async throws {
         let normalizedTargetMacDeviceId = try normalizedRequiredMacDeviceId(deviceId)
+        logMacSwitchState("start", targetMacDeviceId: normalizedTargetMacDeviceId, codex: codex)
         guard normalizedTargetMacDeviceId != codex.normalizedCurrentTrustedMacDeviceId else {
+            logMacSwitchState("ignored-already-current", targetMacDeviceId: normalizedTargetMacDeviceId, codex: codex)
             return
         }
         guard !isSwitchingMac else {
+            logMacSwitchState("ignored-switch-in-flight", targetMacDeviceId: normalizedTargetMacDeviceId, codex: codex)
             return
         }
 
@@ -579,38 +703,66 @@ extension ContentViewModel {
             isSwitchingMac = false
         }
 
+        var effectiveTargetMacDeviceId = normalizedTargetMacDeviceId
         let previousCurrentTrustedMacDeviceId = codex.normalizedCurrentTrustedMacDeviceId
         let previousErrorMessage = codex.lastErrorMessage
-        let previousRelaySessionSnapshot = captureRelaySessionSnapshot(from: codex)
         codex.lastErrorMessage = nil
 
-        try await interruptRunningTurnsBeforeMacSwitchIfNeeded(codex: codex)
-        await stopAutoReconnectForManualRetry(codex: codex)
-
-        codex.saveLocalState(for: previousCurrentTrustedMacDeviceId)
-        beginMacSwitchContext(normalizedTargetMacDeviceId, codex: codex)
-        await codex.disconnect(preserveReconnectIntent: false)
-        codex.clearInMemoryMacScopedState()
-        codex.loadLocalState(for: normalizedTargetMacDeviceId)
-        codex.loadMacScopedDefaultsState(for: normalizedTargetMacDeviceId)
-
         do {
+            // Resolve the selected Mac before touching the live socket so an offline/stale record cannot drop the current connection.
             guard let fullURL = await preferredReconnectURL(
                 codex: codex,
                 targetMacDeviceId: normalizedTargetMacDeviceId
             ) else {
-                throw CodexServiceError.invalidInput("Could not reconnect to the selected Mac.")
+                codex.lastErrorMessage = codex.lastErrorMessage ?? "Could not reconnect to the selected device."
+                macSwitchNotice = macSwitchNotice ?? codex.lastErrorMessage
+                logMacSwitchState("missing-reconnect-url-keeping-current", targetMacDeviceId: normalizedTargetMacDeviceId, codex: codex)
+                throw CodexServiceError.invalidInput("Could not reconnect to the selected device.")
+            }
+            if let resolvedMacDeviceId = codex.normalizedRelayMacDeviceId,
+               resolvedMacDeviceId != effectiveTargetMacDeviceId {
+                effectiveTargetMacDeviceId = resolvedMacDeviceId
+                switchingMacDeviceId = resolvedMacDeviceId
+                logMacSwitchState("retargeted-live-record", targetMacDeviceId: resolvedMacDeviceId, codex: codex)
             }
 
+            try await interruptRunningTurnsBeforeMacSwitchIfNeeded(codex: codex)
+            await stopAutoReconnectForManualRetry(codex: codex)
+
+            codex.saveLocalState(for: previousCurrentTrustedMacDeviceId)
+            beginMacSwitchContext(effectiveTargetMacDeviceId, codex: codex)
+            if let previousCurrentTrustedMacDeviceId {
+                codex.setPreviousTrustedMacDeviceId(previousCurrentTrustedMacDeviceId)
+            } else {
+                codex.clearPreviousTrustedMacDeviceId()
+            }
+            codex.setCurrentTrustedMacDeviceId(effectiveTargetMacDeviceId)
+            await codex.disconnect(preserveReconnectIntent: false)
+            prepareMacSwitchState(for: effectiveTargetMacDeviceId, codex: codex, loadCachedMessages: false)
+            logMacSwitchState("prepared-target-state", targetMacDeviceId: effectiveTargetMacDeviceId, codex: codex)
+
+            if let resolvedMacDeviceId = codex.normalizedRelayMacDeviceId,
+               resolvedMacDeviceId != effectiveTargetMacDeviceId {
+                effectiveTargetMacDeviceId = resolvedMacDeviceId
+                switchingMacDeviceId = resolvedMacDeviceId
+                codex.setCurrentTrustedMacDeviceId(resolvedMacDeviceId)
+                codex.macScopedContextOverrideDeviceId = resolvedMacDeviceId
+                prepareMacSwitchState(for: resolvedMacDeviceId, codex: codex, loadCachedMessages: false)
+                logMacSwitchState("retargeted-live-record", targetMacDeviceId: resolvedMacDeviceId, codex: codex)
+            }
+
+            logMacSwitchState("connect-start", targetMacDeviceId: effectiveTargetMacDeviceId, codex: codex)
             try await connectWithAutoRecovery(
                 codex: codex,
                 performAutoRetry: true,
                 continueWhile: { !self.isCancellingMacSwitch },
                 serverURLProvider: { fullURL }
             )
-            codex.setCurrentTrustedMacDeviceId(normalizedTargetMacDeviceId)
+            codex.setCurrentTrustedMacDeviceId(effectiveTargetMacDeviceId)
             endMacSwitchContext(codex: codex)
+            logMacSwitchState("success", targetMacDeviceId: effectiveTargetMacDeviceId, codex: codex)
         } catch is CancellationError {
+            logMacSwitchState("cancelled", targetMacDeviceId: effectiveTargetMacDeviceId, codex: codex)
             await finalizeCancelledMacSwitch(
                 previousCurrentTrustedMacDeviceId: previousCurrentTrustedMacDeviceId,
                 codex: codex
@@ -618,24 +770,35 @@ extension ContentViewModel {
             throw CancellationError()
         } catch {
             if isCancellingMacSwitch {
+                logMacSwitchState("cancel-requested", targetMacDeviceId: effectiveTargetMacDeviceId, codex: codex)
                 await finalizeCancelledMacSwitch(
                     previousCurrentTrustedMacDeviceId: previousCurrentTrustedMacDeviceId,
                     codex: codex
                 )
                 throw CancellationError()
             }
-            restoreRelaySessionSnapshot(previousRelaySessionSnapshot, to: codex)
-            codex.setCurrentTrustedMacDeviceId(previousCurrentTrustedMacDeviceId)
-            codex.macScopedContextOverrideDeviceId = previousCurrentTrustedMacDeviceId
-            codex.clearInMemoryMacScopedState()
-            codex.loadLocalState(for: previousCurrentTrustedMacDeviceId)
-            codex.loadMacScopedDefaultsState(for: previousCurrentTrustedMacDeviceId)
-            endMacSwitchContext(codex: codex)
+            if codex.isConnected || codex.isInitialized {
+                codex.setCurrentTrustedMacDeviceId(previousCurrentTrustedMacDeviceId)
+                codex.clearPreviousTrustedMacDeviceId()
+                macSwitchNotice = macSwitchNotice
+                    ?? codex.lastErrorMessage
+                    ?? previousErrorMessage
+                    ?? codex.userFacingConnectFailureMessage(error)
+                logMacSwitchState("failed-before-disconnect-kept-current \(macSwitchNotice ?? "")", targetMacDeviceId: normalizedTargetMacDeviceId, codex: codex)
+                throw error
+            }
+            codex.setCurrentTrustedMacDeviceId(effectiveTargetMacDeviceId)
+            codex.macScopedContextOverrideDeviceId = effectiveTargetMacDeviceId
+            prepareMacSwitchState(for: effectiveTargetMacDeviceId, codex: codex, loadCachedMessages: true)
+            restoreSelectedMacPresentationAfterFailedSwitch(codex: codex)
             if codex.lastErrorMessage?.isEmpty ?? true {
                 codex.lastErrorMessage = codex.userFacingConnectFailureMessage(error)
             } else if codex.lastErrorMessage == nil {
                 codex.lastErrorMessage = previousErrorMessage
             }
+            macSwitchNotice = codex.lastErrorMessage
+            endMacSwitchContext(codex: codex)
+            logMacSwitchState("failed \(codex.lastErrorMessage ?? codex.userFacingConnectFailureMessage(error))", targetMacDeviceId: effectiveTargetMacDeviceId, codex: codex)
             throw error
         }
     }
@@ -665,9 +828,7 @@ extension ContentViewModel {
         codex.saveLocalState(for: previousCurrentTrustedMacDeviceId)
         beginMacSwitchContext(pairingPayload.macDeviceId, codex: codex)
         codex.rememberRelayPairing(pairingPayload)
-        codex.clearInMemoryMacScopedState()
-        codex.loadLocalState(for: pairingPayload.macDeviceId)
-        codex.loadMacScopedDefaultsState(for: pairingPayload.macDeviceId)
+        prepareMacSwitchState(for: pairingPayload.macDeviceId, codex: codex, loadCachedMessages: false)
 
         do {
             try await connectWithAutoRecovery(
@@ -694,9 +855,7 @@ extension ContentViewModel {
             codex.setCurrentTrustedMacDeviceId(previousCurrentTrustedMacDeviceId)
             restoreRelaySessionSnapshot(previousRelaySessionSnapshot, to: codex)
             codex.macScopedContextOverrideDeviceId = previousCurrentTrustedMacDeviceId
-            codex.clearInMemoryMacScopedState()
-            codex.loadLocalState(for: previousCurrentTrustedMacDeviceId)
-            codex.loadMacScopedDefaultsState(for: previousCurrentTrustedMacDeviceId)
+            prepareMacSwitchState(for: previousCurrentTrustedMacDeviceId, codex: codex, loadCachedMessages: true)
             endMacSwitchContext(codex: codex)
             if codex.lastErrorMessage?.isEmpty ?? true {
                 codex.lastErrorMessage = codex.userFacingConnectFailureMessage(error)
@@ -773,7 +932,7 @@ extension ContentViewModel {
 
     private func normalizedRequiredMacDeviceId(_ deviceId: String?) throws -> String {
         guard let normalizedMacDeviceId = normalizedMacDeviceId(deviceId) else {
-            throw CodexServiceError.invalidInput("A valid Mac device id is required.")
+            throw CodexServiceError.invalidInput("A valid device id is required.")
         }
         return normalizedMacDeviceId
     }
@@ -783,9 +942,57 @@ extension ContentViewModel {
         codex.macScopedContextOverrideDeviceId = normalizedMacDeviceId(macDeviceId)
     }
 
+    private func prepareMacSwitchState(
+        for macDeviceId: String?,
+        codex: CodexService,
+        loadCachedMessages: Bool
+    ) {
+        codex.clearInMemoryMacScopedState()
+        if loadCachedMessages {
+            codex.loadLocalState(for: macDeviceId)
+        }
+        // Manual switches wait for live sync before showing messages so stale per-Mac caches do not flash.
+        codex.loadMacScopedDefaultsState(for: macDeviceId)
+    }
+
     private func endMacSwitchContext(codex: CodexService) {
         codex.macScopedContextOverrideDeviceId = nil
         codex.suspendAutomaticMacScopedPersistence = false
+    }
+
+    // Keeps an explicit manual Mac selection durable even when the socket cannot reconnect yet.
+    private func restoreSelectedMacPresentationAfterFailedSwitch(codex: CodexService) {
+        if codex.secureConnectionState == .rePairRequired || codex.secureConnectionState == .updateRequired {
+            return
+        }
+
+        codex.restoreTrustedPairPresentationState()
+    }
+
+    // Emits redacted switch traces so manual Mac switching can be debugged from device logs.
+    private func logMacSwitchState(_ event: String, targetMacDeviceId: String?, codex: CodexService) {
+        let target = redactedMacSwitchIdentifier(targetMacDeviceId)
+        let current = redactedMacSwitchIdentifier(codex.normalizedCurrentTrustedMacDeviceId)
+        let previous = redactedMacSwitchIdentifier(codex.normalizedPreviousTrustedMacDeviceId)
+        let relayMac = redactedMacSwitchIdentifier(codex.normalizedRelayMacDeviceId)
+        let relaySession = redactedMacSwitchIdentifier(codex.normalizedRelaySessionId)
+        print(
+            "[CodexSwitch] \(event) target=\(target) current=\(current) previous=\(previous) "
+            + "relayMac=\(relayMac) relaySession=\(relaySession) connected=\(codex.isConnected) "
+            + "state=\(codex.secureConnectionState.statusLabel)"
+        )
+    }
+
+    private func redactedMacSwitchIdentifier(_ value: String?) -> String {
+        guard let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !normalized.isEmpty else {
+            return "none"
+        }
+        return SHA256.hash(data: Data(normalized.utf8))
+            .compactMap { String(format: "%02x", $0) }
+            .joined()
+            .prefix(8)
+            .description
     }
 
     private func interruptRunningTurnsBeforeMacSwitchIfNeeded(codex: CodexService) async throws {
@@ -793,13 +1000,55 @@ extension ContentViewModel {
             return
         }
 
-        guard !codex.runningThreadIDs.isEmpty
-            || !codex.protectedRunningFallbackThreadIDs.isEmpty
-            || !codex.activeTurnIdByThread.isEmpty else {
+        let runningCount = codex.runningThreadIDs.count
+        let protectedCount = codex.protectedRunningFallbackThreadIDs.count
+        let activeCount = codex.activeTurnIdByThread.count
+        guard runningCount > 0 || protectedCount > 0 || activeCount > 0 else {
             return
         }
 
-        try await codex.interruptAllRunningTurnsBeforeMacSwitch()
+        logMacSwitchState(
+            "interrupt-running-start running=\(runningCount) protected=\(protectedCount) active=\(activeCount)",
+            targetMacDeviceId: switchingMacDeviceId,
+            codex: codex
+        )
+
+        do {
+            try await runMacSwitchInterruptPreflight(codex: codex)
+            logMacSwitchState("interrupt-running-finished", targetMacDeviceId: switchingMacDeviceId, codex: codex)
+        } catch is MacSwitchInterruptTimeout {
+            codex.lastErrorMessage = nil
+            logMacSwitchState("interrupt-running-timeout-continuing", targetMacDeviceId: switchingMacDeviceId, codex: codex)
+        } catch {
+            codex.lastErrorMessage = nil
+            logMacSwitchState(
+                "interrupt-running-failed-continuing \(codex.userFacingTurnErrorMessageForFooter(from: error) ?? String(describing: error))",
+                targetMacDeviceId: switchingMacDeviceId,
+                codex: codex
+            )
+        }
+    }
+
+    // Interrupting the old Mac is best-effort; stale run state must not block an explicit Mac switch.
+    private func runMacSwitchInterruptPreflight(codex: CodexService) async throws {
+        let timeoutNanoseconds = macSwitchInterruptTimeoutNanoseconds
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask { @MainActor in
+                try await codex.interruptAllRunningTurnsBeforeMacSwitch()
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: timeoutNanoseconds)
+                throw MacSwitchInterruptTimeout()
+            }
+
+            do {
+                _ = try await group.next()
+                group.cancelAll()
+            } catch {
+                group.cancelAll()
+                throw error
+            }
+        }
     }
 
     private func finalizeCancelledMacSwitch(
@@ -818,7 +1067,7 @@ extension ContentViewModel {
         codex.clearSavedRelaySession()
         codex.clearInMemoryMacScopedState()
         endMacSwitchContext(codex: codex)
-        macSwitchNotice = "Switch cancelled. Choose a Mac to reconnect."
+        macSwitchNotice = "Switch cancelled. Choose a device to reconnect."
     }
 
     private func captureRelaySessionSnapshot(from codex: CodexService) -> RelaySessionSnapshot {

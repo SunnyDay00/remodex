@@ -112,7 +112,7 @@ private extension CodexService {
 
         switch secureConnectionState {
         case .handshaking:
-            return "Pairing Computer"
+            return "Pairing Device"
         case .liveSessionUnresolved, .reconnecting, .trustedMac:
             return "Saved Pair"
         case .rePairRequired:

@@ -18,7 +18,7 @@ struct SidebarOverflowMenuActions {
     var onQuickChat: () -> Void
     var onNewProject: () -> Void
     var onOpenTerminal: () -> Void
-    var onOpenMyMacs: () -> Void
+    var onOpenConnections: () -> Void
     var onOpenSettings: () -> Void
 }
 
@@ -40,12 +40,6 @@ struct SidebarHeaderView: View {
                 Spacer(minLength: 0)
 
                 overflowMenuButton
-
-                SidebarToolbarIconButton(
-                    icon: .systemImage("desktopcomputer"),
-                    accessibilityLabel: "My Macs",
-                    action: overflowActions.onOpenMyMacs
-                )
 
                 SidebarToolbarIconButton(
                     icon: .systemImage("gearshape"),
@@ -99,25 +93,49 @@ struct SidebarHeaderView: View {
             },
             menu: { buildOverflowMenu() }
         )
-        .disabled(!overflowActions.isEnabled)
-        .opacity(overflowActions.isEnabled ? 1 : 0.4)
         .accessibilityLabel("More actions")
     }
 
     private func buildOverflowMenu() -> UIMenu {
         UIMenu(
             title: "",
-            options: [.displayInline],
             children: [
-                overflowAction(title: "New Chat", systemName: "square.and.pencil") {
-                    overflowActions.onNewChat()
-                },
-                overflowAction(title: "Quick Chat", systemName: "message") {
-                    overflowActions.onQuickChat()
-                },
-                overflowAction(title: "New Project", systemName: "folder.badge.plus") {
-                    overflowActions.onNewProject()
-                },
+                UIMenu(
+                    title: "",
+                    options: [.displayInline],
+                    children: [
+                        overflowAction(
+                            title: "New Chat",
+                            systemName: "square.and.pencil",
+                            isEnabled: overflowActions.isEnabled
+                        ) {
+                            overflowActions.onNewChat()
+                        },
+                        overflowAction(
+                            title: "Quick Chat",
+                            systemName: "message",
+                            isEnabled: overflowActions.isEnabled
+                        ) {
+                            overflowActions.onQuickChat()
+                        },
+                        overflowAction(
+                            title: "New Project",
+                            systemName: "folder.badge.plus",
+                            isEnabled: overflowActions.isEnabled
+                        ) {
+                            overflowActions.onNewProject()
+                        },
+                    ]
+                ),
+                UIMenu(
+                    title: "",
+                    options: [.displayInline],
+                    children: [
+                        overflowAction(title: "Connections", systemName: "desktopcomputer") {
+                            overflowActions.onOpenConnections()
+                        },
+                    ]
+                ),
             ]
         )
     }
@@ -125,11 +143,13 @@ struct SidebarHeaderView: View {
     private func overflowAction(
         title: String,
         systemName: String,
+        isEnabled: Bool = true,
         handler: @escaping () -> Void
     ) -> UIAction {
         UIAction(
             title: title,
-            image: RemodexIcon.menuUIImage(systemName: systemName)
+            image: RemodexIcon.menuUIImage(systemName: systemName),
+            attributes: isEnabled ? [] : .disabled
         ) { _ in
             HapticFeedback.shared.triggerImpactFeedback(style: .light)
             handler()
@@ -148,7 +168,7 @@ struct SidebarHeaderView: View {
             onQuickChat: {},
             onNewProject: {},
             onOpenTerminal: {},
-            onOpenMyMacs: {},
+            onOpenConnections: {},
             onOpenSettings: {}
         )
     )
