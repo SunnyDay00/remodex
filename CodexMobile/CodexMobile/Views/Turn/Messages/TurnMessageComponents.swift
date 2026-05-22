@@ -417,7 +417,6 @@ struct MessageRow: View, Equatable {
                             text: text,
                             actionText: actionText,
                             renderModel: renderModel,
-                            showsStreamingAnimations: showsStreamingAnimations,
                             subagentOpenAction: subagentOpenAction,
                             onSelectText: { selectableTextSheet = $0 }
                         )

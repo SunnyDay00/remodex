@@ -242,17 +242,30 @@ struct SidebarView<ConnectionEmptyStatePanel: View, ConnectionEmptyStateFooter: 
 
     // Opens a draft composer first; the real thread is created only after the first send.
     // Seeds the draft with the latest used project so the pill under the prompt has a sensible
-    // default the user can still change via the picker.
+    // default the user can still change via the inline folder menu.
+    // Regression guard: project-backed New Chat relies on
+    // this path to preserve "What should we work on?" + folder picker.
     private func handleNewChatButtonTap() {
         prepareSidebarForChatNavigation()
         onOpenNewChatDraft(.generalChat, defaultNewChatProjectPath)
     }
 
-    // Bottom Chat pill is the fast rootless draft entry: no project preselection,
-    // no picker pill, and the real Codex-style cwd is minted on first send.
+    // Opens the global Chats scope as a plain rootless draft: no folder picker,
+    // no preselected project, just the prompt and composer.
     private func handleRootlessChatDraftTap() {
         prepareSidebarForChatNavigation()
         onOpenNewChatDraft(.generalChat, nil)
+    }
+
+    // Routes the shared bottom Chat button by the active sidebar scope without
+    // putting a closure ternary inside the SwiftUI view builder.
+    private func handleBottomChatTap() {
+        switch selectedContentScope {
+        case .projects:
+            handleNewChatButtonTap()
+        case .chats:
+            handleRootlessChatDraftTap()
+        }
     }
 
     // Starts a chat without a working directory (cwd == nil) directly from the sidebar row.
@@ -714,7 +727,8 @@ struct SidebarView<ConnectionEmptyStatePanel: View, ConnectionEmptyStateFooter: 
         SidebarBottomActionBar(
             isChatEnabled: canCreateThread,
             isCreatingThread: isCreatingThread,
-            onTapChat: handleRootlessChatDraftTap,
+            // Scope matters: Projects > Chat shows the folder picker; Chats > Chat stays rootless.
+            onTapChat: handleBottomChatTap,
             onTapTerminal: openTerminal
         )
     }
