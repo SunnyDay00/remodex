@@ -17,6 +17,8 @@ const {
   createDesktopIpcActionFollower,
   desktopFollowerPayloadForResponse,
   projectDesktopAssistantDeltaNotifications,
+  projectDesktopTurnCompletedNotifications,
+  projectDesktopUserMessageNotifications,
   projectPendingDesktopActions,
   resolveDefaultIpcSocketPath,
   seedConversationStateFromThreadRead,
@@ -453,6 +455,96 @@ test("does not replay unchanged or rewritten assistant text as live deltas", () 
   assert.deepEqual(
     projectDesktopAssistantDeltaNotifications("thread-1", previousState, nextState),
     []
+  );
+});
+
+test("projects desktop user prelude notifications once for active assistant turns", () => {
+  const mirroredKeys = new Set();
+  const state = {
+    turns: [{
+      id: "turn-1",
+      items: [{
+        id: "user-1",
+        type: "user_message",
+        text: "Fix the ordering",
+        createdAt: "2026-05-26T20:01:42.000Z",
+      }, {
+        id: "assistant-1",
+        type: "assistant_message",
+        text: "Working",
+      }],
+    }, {
+      id: "turn-old",
+      items: [{
+        id: "user-old",
+        type: "user_message",
+        text: "Old prompt",
+      }],
+    }],
+  };
+
+  const first = projectDesktopUserMessageNotifications(
+    "thread-1",
+    state,
+    mirroredKeys,
+    new Set(["turn-1"])
+  );
+  const second = projectDesktopUserMessageNotifications(
+    "thread-1",
+    state,
+    mirroredKeys,
+    new Set(["turn-1"])
+  );
+
+  assert.deepEqual(first, [{
+    method: "codex/event/user_message",
+    params: {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      message: "Fix the ordering",
+      id: "user-1",
+      timestamp: "2026-05-26T20:01:42.000Z",
+      remodexDesktopMirror: true,
+      remodexDesktopIpcMirror: true,
+    },
+  }]);
+  assert.deepEqual(second, []);
+});
+
+test("projects desktop turn completion notifications from terminal state", () => {
+  const state = {
+    turns: [{
+      id: "turn-1",
+      status: "completed",
+      items: [{
+        id: "assistant-1",
+        type: "assistant_message",
+        text: "Done",
+      }],
+    }, {
+      id: "turn-running",
+      status: "running",
+      items: [{
+        id: "assistant-running",
+        type: "assistant_message",
+        text: "Still going",
+      }],
+    }],
+  };
+
+  assert.deepEqual(
+    projectDesktopTurnCompletedNotifications("thread-1", state, new Set(["turn-1", "turn-running"])),
+    [{
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        id: "turn-1",
+        status: "completed",
+        remodexDesktopMirror: true,
+        remodexDesktopIpcMirror: true,
+      },
+    }]
   );
 });
 
@@ -1045,6 +1137,7 @@ test("desktop IPC follower mirrors live assistant text growth from desktop state
       outbound.push(JSON.parse(message));
     },
     requestTimeoutMs: 500,
+    turnCompletionIdleMs: 10,
   });
   t.after(() => follower.stopAll());
 
@@ -1066,6 +1159,10 @@ test("desktop IPC follower mirrors live assistant text growth from desktop state
           turns: [{
             id: "turn-live-delta",
             items: [{
+              id: "user-live-delta",
+              type: "user_message",
+              text: "Make the message show first",
+            }, {
               id: "assistant-live-delta",
               type: "assistant_message",
               text: "Hello",
@@ -1086,7 +1183,7 @@ test("desktop IPC follower mirrors live assistant text growth from desktop state
         type: "patches",
         patches: [{
           op: "replace",
-          path: ["turns", 0, "items", 0, "text"],
+          path: ["turns", 0, "items", 1, "text"],
           value: "Hello world",
         }],
       },
@@ -1094,12 +1191,31 @@ test("desktop IPC follower mirrors live assistant text growth from desktop state
   });
 
   await waitFor(() => outbound.find((message) => message.method === "item/agentMessage/delta"));
+  assert.equal(outbound[0].method, "codex/event/user_message");
+  assert.deepEqual(outbound[0].params, {
+    threadId: "thread-live-delta",
+    turnId: "turn-live-delta",
+    message: "Make the message show first",
+    id: "user-live-delta",
+    remodexDesktopMirror: true,
+    remodexDesktopIpcMirror: true,
+  });
   const deltaMessage = outbound.find((message) => message.method === "item/agentMessage/delta");
   assert.deepEqual(deltaMessage.params, {
     threadId: "thread-live-delta",
     turnId: "turn-live-delta",
     itemId: "assistant-live-delta",
     delta: " world",
+  });
+  await waitFor(() => outbound.find((message) => message.method === "turn/completed"));
+  const completedMessage = outbound.find((message) => message.method === "turn/completed");
+  assert.deepEqual(completedMessage.params, {
+    threadId: "thread-live-delta",
+    turnId: "turn-live-delta",
+    id: "turn-live-delta",
+    status: "completed",
+    remodexDesktopMirror: true,
+    remodexDesktopIpcMirror: true,
   });
 });
 

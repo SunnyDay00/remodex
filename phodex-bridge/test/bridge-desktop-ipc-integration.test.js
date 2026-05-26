@@ -134,7 +134,6 @@ test("bridge forwards desktop IPC actions to the phone and routes replies back t
       },
     },
   });
-
   const actionMessage = await waitForMessage(relayMessages, (message) => message.id === "req-ipc");
   assert.equal(actionMessage.method, "item/tool/requestUserInput");
 
@@ -385,6 +384,10 @@ test("bridge forwards live desktop assistant deltas to the phone", async (t) => 
           turns: [{
             id: "turn-ipc-delta",
             items: [{
+              id: "user-ipc-delta",
+              type: "user_message",
+              text: "Please mirror me first",
+            }, {
               id: "assistant-ipc-delta",
               type: "assistant_message",
               text: "Hello",
@@ -405,8 +408,25 @@ test("bridge forwards live desktop assistant deltas to the phone", async (t) => 
         type: "patches",
         patches: [{
           op: "replace",
-          path: ["turns", 0, "items", 0, "text"],
+          path: ["turns", 0, "items", 1, "text"],
           value: "Hello world",
+        }],
+      },
+    },
+  });
+  writeFrame(ipcServerSocket, {
+    type: "broadcast",
+    method: "thread-stream-state-changed",
+    sourceClientId: "desktop",
+    version: 1,
+    params: {
+      conversationId: "thread-ipc-delta",
+      change: {
+        type: "patches",
+        patches: [{
+          op: "replace",
+          path: ["turns", 0, "status"],
+          value: "completed",
         }],
       },
     },
@@ -416,12 +436,35 @@ test("bridge forwards live desktop assistant deltas to the phone", async (t) => 
     relayMessages,
     (message) => message.method === "item/agentMessage/delta"
   );
+  const userMessage = relayMessages.find((message) => message.method === "codex/event/user_message");
+  assert.deepEqual(userMessage.params, {
+    threadId: "thread-ipc-delta",
+    turnId: "turn-ipc-delta",
+    message: "Please mirror me first",
+    id: "user-ipc-delta",
+    remodexDesktopMirror: true,
+    remodexDesktopIpcMirror: true,
+  });
+  assert.ok(relayMessages.indexOf(userMessage) < relayMessages.indexOf(deltaMessage));
   assert.deepEqual(deltaMessage.params, {
     threadId: "thread-ipc-delta",
     turnId: "turn-ipc-delta",
     itemId: "assistant-ipc-delta",
     delta: " world",
   });
+  const completedMessage = await waitForMessage(
+    relayMessages,
+    (message) => message.method === "turn/completed"
+  );
+  assert.deepEqual(completedMessage.params, {
+    threadId: "thread-ipc-delta",
+    turnId: "turn-ipc-delta",
+    id: "turn-ipc-delta",
+    status: "completed",
+    remodexDesktopMirror: true,
+    remodexDesktopIpcMirror: true,
+  });
+  assert.ok(relayMessages.indexOf(deltaMessage) < relayMessages.indexOf(completedMessage));
 });
 
 // Loads bridge.js with plaintext test transports while leaving the production module untouched.

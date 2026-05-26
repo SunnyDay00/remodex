@@ -11,6 +11,7 @@ const path = require("path");
 const FRAME_HEADER_BYTES = 4;
 const MAX_FRAME_BYTES = 256 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 10_000;
+const TURN_COMPLETION_IDLE_MS = 3_500;
 const DESKTOP_IPC_ACTION_SOURCE = "desktop-ipc-action-follower";
 const DESKTOP_RESUME_METHODS = new Set(["thread/read", "thread/resume"]);
 const ACTION_METHODS = new Set([
@@ -44,6 +45,9 @@ function createDesktopIpcActionFollower({
   netModule = net,
   now = () => Date.now(),
   requestTimeoutMs = REQUEST_TIMEOUT_MS,
+  turnCompletionIdleMs = TURN_COMPLETION_IDLE_MS,
+  setTimeoutFn = setTimeout,
+  clearTimeoutFn = clearTimeout,
 } = {}) {
   const ipc = createDesktopIpcClient({
     socketPath,
@@ -56,6 +60,8 @@ function createDesktopIpcActionFollower({
   });
   const rawStatesByThreadId = new Map();
   const assistantMessageTextsByThreadId = new Map();
+  const mirroredUserMessageKeysByThreadId = new Map();
+  const activeDesktopTurnsByThreadId = new Map();
   const pendingRoutesByRequestId = new Map();
   const activeThreadIds = new Set();
   const recoveringThreadIds = new Set();
@@ -87,6 +93,8 @@ function createDesktopIpcActionFollower({
   function stopAll() {
     rawStatesByThreadId.clear();
     assistantMessageTextsByThreadId.clear();
+    mirroredUserMessageKeysByThreadId.clear();
+    clearAllDesktopTurnCompletionTimers();
     pendingRoutesByRequestId.clear();
     activeThreadIds.clear();
     recoveringThreadIds.clear();
@@ -142,6 +150,8 @@ function createDesktopIpcActionFollower({
   function onDisconnect() {
     rawStatesByThreadId.clear();
     assistantMessageTextsByThreadId.clear();
+    mirroredUserMessageKeysByThreadId.clear();
+    clearAllDesktopTurnCompletionTimers();
     pendingRoutesByRequestId.clear();
     recoveringThreadIds.clear();
     queuedChangesByThreadId.clear();
@@ -283,9 +293,11 @@ function createDesktopIpcActionFollower({
   }
 
   function syncProjectedAssistantDeltas(threadId, previousState, nextState) {
+    refreshTrackedDesktopTurnState(threadId, nextState);
     const previousTexts = assistantMessageTextsByThreadId.get(threadId);
     if (!previousTexts && !previousState) {
       assistantMessageTextsByThreadId.set(threadId, snapshotAssistantMessageTexts(nextState));
+      syncProjectedDesktopTurnCompletions(threadId, nextState);
       return;
     }
 
@@ -297,13 +309,136 @@ function createDesktopIpcActionFollower({
     );
     if (notifications.length === 0) {
       assistantMessageTextsByThreadId.set(threadId, snapshotAssistantMessageTexts(nextState));
+      syncProjectedDesktopTurnCompletions(threadId, nextState);
       return;
     }
 
-    for (const notification of notifications) {
+    const activeDeltaTurnIds = new Set(
+      notifications
+        .map((notification) => readString(notification?.params?.turnId) || readString(notification?.params?.turn_id))
+        .filter(Boolean)
+    );
+    const userNotifications = projectDesktopUserMessageNotifications(
+      threadId,
+      nextState,
+      mirroredUserMessageKeysForThread(threadId),
+      activeDeltaTurnIds
+    );
+
+    // Desktop IPC state can report assistant text growth before rollout replay catches
+    // up with the user prelude. Emit the opening prompt first to avoid mobile row jumps.
+    for (const notification of [...userNotifications, ...notifications]) {
       sendApplicationResponse(JSON.stringify(notification));
     }
+    for (const turnId of activeDeltaTurnIds) {
+      noteDesktopIpcTurnActivity(threadId, turnId, nextState);
+    }
     assistantMessageTextsByThreadId.set(threadId, snapshotAssistantMessageTexts(nextState));
+    syncProjectedDesktopTurnCompletions(threadId, nextState);
+  }
+
+  function mirroredUserMessageKeysForThread(threadId) {
+    let keys = mirroredUserMessageKeysByThreadId.get(threadId);
+    if (!keys) {
+      keys = new Set();
+      mirroredUserMessageKeysByThreadId.set(threadId, keys);
+    }
+    return keys;
+  }
+
+  function noteDesktopIpcTurnActivity(threadId, turnId, latestState) {
+    if (!turnId || turnCompletionIdleMs <= 0) {
+      return;
+    }
+
+    let turns = activeDesktopTurnsByThreadId.get(threadId);
+    if (!turns) {
+      turns = new Map();
+      activeDesktopTurnsByThreadId.set(threadId, turns);
+    }
+
+    const existing = turns.get(turnId);
+    if (existing?.timer) {
+      clearTimeoutFn(existing.timer);
+    }
+
+    const entry = { latestState, timer: null };
+    turns.set(turnId, entry);
+    scheduleDesktopIpcTurnIdleCompletion(threadId, turnId, entry);
+  }
+
+  function scheduleDesktopIpcTurnIdleCompletion(threadId, turnId, entry) {
+    entry.timer = setTimeoutFn(() => {
+      const currentTurns = activeDesktopTurnsByThreadId.get(threadId);
+      const currentEntry = currentTurns?.get(turnId);
+      if (!currentEntry) {
+        return;
+      }
+
+      if (hasOpenDesktopRequestForTurn(currentEntry.latestState, turnId)) {
+        scheduleDesktopIpcTurnIdleCompletion(threadId, turnId, currentEntry);
+        return;
+      }
+
+      completeDesktopIpcTurn(threadId, turnId);
+    }, turnCompletionIdleMs);
+    entry.timer.unref?.();
+  }
+
+  function refreshTrackedDesktopTurnState(threadId, latestState) {
+    const turns = activeDesktopTurnsByThreadId.get(threadId);
+    if (!turns) {
+      return;
+    }
+
+    for (const entry of turns.values()) {
+      entry.latestState = latestState;
+    }
+  }
+
+  function syncProjectedDesktopTurnCompletions(threadId, nextState) {
+    const turns = activeDesktopTurnsByThreadId.get(threadId);
+    if (!turns || turns.size === 0) {
+      return;
+    }
+
+    const completions = projectDesktopTurnCompletedNotifications(
+      threadId,
+      nextState,
+      new Set(turns.keys())
+    );
+    for (const notification of completions) {
+      completeDesktopIpcTurn(threadId, notification.params.turnId, notification.params.status || "completed");
+    }
+  }
+
+  function completeDesktopIpcTurn(threadId, turnId, status = "completed") {
+    const turns = activeDesktopTurnsByThreadId.get(threadId);
+    const entry = turns?.get(turnId);
+    if (!entry) {
+      return;
+    }
+
+    if (entry.timer) {
+      clearTimeoutFn(entry.timer);
+    }
+    turns.delete(turnId);
+    if (turns.size === 0) {
+      activeDesktopTurnsByThreadId.delete(threadId);
+    }
+
+    sendApplicationResponse(JSON.stringify(createDesktopIpcTurnCompletedNotification(threadId, turnId, status)));
+  }
+
+  function clearAllDesktopTurnCompletionTimers() {
+    for (const turns of activeDesktopTurnsByThreadId.values()) {
+      for (const entry of turns.values()) {
+        if (entry.timer) {
+          clearTimeoutFn(entry.timer);
+        }
+      }
+    }
+    activeDesktopTurnsByThreadId.clear();
   }
 
   return {
@@ -612,8 +747,118 @@ function projectDesktopAssistantDeltaNotifications(
   return notifications;
 }
 
+function projectDesktopUserMessageNotifications(
+  threadId,
+  conversationState,
+  mirroredKeys = new Set(),
+  turnIdFilter = null
+) {
+  const messages = collectUserMessages(conversationState);
+  const notifications = [];
+
+  for (const message of messages) {
+    if (turnIdFilter && turnIdFilter.size > 0 && !turnIdFilter.has(message.turnId)) {
+      continue;
+    }
+    if (mirroredKeys.has(message.key)) {
+      continue;
+    }
+
+    mirroredKeys.add(message.key);
+    notifications.push({
+      method: "codex/event/user_message",
+      params: {
+        threadId,
+        turnId: message.turnId,
+        message: message.text,
+        ...(message.itemId ? { id: message.itemId } : {}),
+        ...(message.timestamp ? { timestamp: message.timestamp } : {}),
+        remodexDesktopMirror: true,
+        remodexDesktopIpcMirror: true,
+      },
+    });
+  }
+
+  return notifications;
+}
+
+function projectDesktopTurnCompletedNotifications(
+  threadId,
+  conversationState,
+  trackedTurnIds = new Set()
+) {
+  if (!trackedTurnIds || trackedTurnIds.size === 0) {
+    return [];
+  }
+
+  const turns = Array.isArray(conversationState?.turns) ? conversationState.turns : [];
+  const notifications = [];
+  for (const turn of turns) {
+    const turnId = readString(turn?.id) || readString(turn?.turnId) || readString(turn?.turn_id);
+    if (!turnId || !trackedTurnIds.has(turnId)) {
+      continue;
+    }
+    if (!isDesktopTurnTerminal(turn, conversationState)) {
+      continue;
+    }
+
+    notifications.push(createDesktopIpcTurnCompletedNotification(
+      threadId,
+      turnId,
+      desktopTerminalStatus(turn, conversationState) || "completed"
+    ));
+  }
+  return notifications;
+}
+
+function createDesktopIpcTurnCompletedNotification(threadId, turnId, status = "completed") {
+  return {
+    method: "turn/completed",
+    params: {
+      threadId,
+      turnId,
+      id: turnId,
+      status,
+      remodexDesktopMirror: true,
+      remodexDesktopIpcMirror: true,
+    },
+  };
+}
+
 function snapshotAssistantMessageTexts(conversationState) {
   return new Map(collectAssistantMessages(conversationState).map((message) => [message.key, message.text]));
+}
+
+function collectUserMessages(conversationState) {
+  const turns = Array.isArray(conversationState?.turns) ? conversationState.turns : [];
+  const messages = [];
+  for (const turn of turns) {
+    const turnId = readString(turn?.id) || readString(turn?.turnId) || readString(turn?.turn_id);
+    const items = Array.isArray(turn?.items) ? turn.items : [];
+    for (const item of items) {
+      if (!isUserMessageItem(item)) {
+        continue;
+      }
+
+      const text = userMessageText(item);
+      if (!turnId || !text) {
+        continue;
+      }
+
+      const itemId = readString(item?.id) || readString(item?.itemId) || readString(item?.item_id);
+      messages.push({
+        key: userMessageKey(turnId, itemId, text),
+        turnId,
+        itemId,
+        text,
+        timestamp: readString(item?.createdAt)
+          || readString(item?.created_at)
+          || readString(item?.timestamp)
+          || readString(item?.time),
+      });
+    }
+  }
+  return messages;
 }
 
 function collectAssistantMessages(conversationState) {
@@ -644,12 +889,163 @@ function collectAssistantMessages(conversationState) {
   return messages;
 }
 
+function userMessageKey(turnId, itemId, text) {
+  if (itemId) {
+    return `${turnId}:${itemId}`;
+  }
+  return `${turnId}:text:${crypto
+    .createHash("sha256")
+    .update(text)
+    .digest("hex")
+    .slice(0, 16)}`;
+}
+
+function isDesktopTurnTerminal(turn, conversationState) {
+  if (desktopTerminalStatus(turn, conversationState)) {
+    return true;
+  }
+
+  return hasExplicitFalseFlag(turn, ["running", "isRunning", "streaming", "isStreaming"])
+    || (
+      hasExplicitFalseFlag(conversationState, ["running", "isRunning", "streaming", "isStreaming"])
+      && !hasOpenDesktopRequestForTurn(conversationState, readString(turn?.id) || readString(turn?.turnId) || readString(turn?.turn_id))
+    );
+}
+
+function desktopTerminalStatus(turn, conversationState) {
+  const terminal = terminalStatusFromObject(turn)
+    || terminalStatusFromObject(turn?.turn)
+    || terminalStatusFromObject(conversationState);
+  return terminal || "";
+}
+
+function terminalStatusFromObject(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return "";
+  }
+
+  const booleanStatus = terminalStatusFromBooleans(value);
+  if (booleanStatus) {
+    return booleanStatus;
+  }
+
+  const candidates = [
+    value.status,
+    value.state,
+    value.phase,
+    value.lifecycle,
+    value.lifecycleStatus,
+    value.lifecycle_status,
+    value.runStatus,
+    value.run_status,
+    value.turnStatus,
+    value.turn_status,
+  ];
+  for (const candidate of candidates) {
+    const token = normalizeToken(readString(candidate));
+    if (TERMINAL_STATUS_TOKENS.has(token)) {
+      return canonicalTerminalStatus(token);
+    }
+  }
+  return "";
+}
+
+function terminalStatusFromBooleans(value) {
+  if (value.completed === true || value.complete === true || value.done === true || value.finished === true) {
+    return "completed";
+  }
+  if (value.failed === true || value.error === true) {
+    return "failed";
+  }
+  if (value.cancelled === true || value.canceled === true || value.interrupted === true) {
+    return "canceled";
+  }
+  return "";
+}
+
+const TERMINAL_STATUS_TOKENS = new Set([
+  "completed",
+  "complete",
+  "finished",
+  "succeeded",
+  "success",
+  "failed",
+  "failure",
+  "error",
+  "cancelled",
+  "canceled",
+  "interrupted",
+]);
+
+function canonicalTerminalStatus(token) {
+  if (token === "failed" || token === "failure" || token === "error") {
+    return "failed";
+  }
+  if (token === "cancelled" || token === "canceled" || token === "interrupted") {
+    return "canceled";
+  }
+  return "completed";
+}
+
+function hasExplicitFalseFlag(value, keys) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  return keys.some((key) => Object.prototype.hasOwnProperty.call(value, key) && value[key] === false);
+}
+
+function hasOpenDesktopRequestForTurn(conversationState, turnId) {
+  if (!turnId) {
+    return false;
+  }
+
+  const requests = Array.isArray(conversationState?.requests) ? conversationState.requests : [];
+  return requests.some((request) => {
+    if (!request || request.completed === true) {
+      return false;
+    }
+
+    const params = request.params && typeof request.params === "object" && !Array.isArray(request.params)
+      ? request.params
+      : {};
+    const requestTurnId = readString(params.turnId)
+      || readString(params.turn_id)
+      || readString(request.turnId)
+      || readString(request.turn_id);
+    return requestTurnId === turnId;
+  });
+}
+
+function isUserMessageItem(item) {
+  const type = normalizeToken(item?.type);
+  if (type === "usermessage") {
+    return true;
+  }
+  return type === "message" && normalizeToken(item?.role) === "user";
+}
+
 function isAssistantMessageItem(item) {
   const type = normalizeToken(item?.type);
   if (type === "agentmessage" || type === "assistantmessage") {
     return true;
   }
   return type === "message" && normalizeToken(item?.role) === "assistant";
+}
+
+function userMessageText(item) {
+  const directText = readString(item?.text) || readString(item?.message);
+  if (directText) {
+    return directText;
+  }
+
+  const content = Array.isArray(item?.content) ? item.content : [];
+  return content
+    .map((entry) => entry && typeof entry === "object" ? entry : null)
+    .filter(Boolean)
+    .map((entry) => readString(entry.text) || readString(entry?.data?.text))
+    .filter(Boolean)
+    .join("");
 }
 
 function assistantMessageText(item) {
@@ -844,6 +1240,8 @@ module.exports = {
   createDesktopIpcActionFollower,
   desktopFollowerPayloadForResponse,
   projectDesktopAssistantDeltaNotifications,
+  projectDesktopTurnCompletedNotifications,
+  projectDesktopUserMessageNotifications,
   projectPendingDesktopActions,
   resolveDefaultIpcSocketPath,
   seedConversationStateFromThreadRead,
