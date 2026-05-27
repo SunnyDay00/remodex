@@ -339,7 +339,7 @@ struct AssistantRevertStateCacheEntry {
 @MainActor
 @Observable
 final class CodexService {
-    static let minimumSupportedBridgePackageVersion = "1.3.9"
+    static let minimumSupportedBridgePackageVersion = "2.0.0"
 
     // --- Public state ---------------------------------------------------------
 

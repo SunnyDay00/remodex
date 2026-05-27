@@ -283,7 +283,7 @@ Prints the installed Remodex CLI version.
 
 ```sh
 remodex --version
-# => 1.5.0
+# => 2.0.0
 ```
 
 ### `remodex reset-pairing`
