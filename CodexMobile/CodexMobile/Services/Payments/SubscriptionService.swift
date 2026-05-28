@@ -124,7 +124,7 @@ final class SubscriptionService {
         if selfHostedAccessEnabled {
             return true
         }
-        freeSendCount < Self.freeSendLimit
+        return freeSendCount < Self.freeSendLimit
     }
 
     var hasAppAccess: Bool {
