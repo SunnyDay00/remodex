@@ -38,6 +38,7 @@ jobs:
           archive_path="$output_dir/CodexMobile.xcarchive"
           ipa_path="$output_dir/remodex-unsigned-release.ipa"
           build_log_path="$output_dir/xcodebuild.log"
+          result_bundle_path="$output_dir/CodexMobile.xcresult"
 
           rm -rf "$output_dir"
           mkdir -p "$output_dir"
@@ -48,12 +49,16 @@ jobs:
             -configuration Release \
             -destination "generic/platform=iOS" \
             -archivePath "$archive_path" \
+            -resultBundlePath "$result_bundle_path" \
+            -jobs 1 \
             archive \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             DEVELOPMENT_TEAM="" \
             PROVISIONING_PROFILE_SPECIFIER="" \
+            SWIFT_COMPILATION_MODE=singlefile \
+            SWIFT_OPTIMIZATION_LEVEL="-Onone" \
             2>&1 | tee "$build_log_path"
 
           app_path="$(find "$archive_path/Products/Applications" -maxdepth 1 -name '*.app' -print -quit)"
@@ -77,3 +82,13 @@ jobs:
           name: remodex-unsigned-ipa
           path: build/unsigned-ipa/remodex-unsigned-release.ipa
           if-no-files-found: error
+
+      - name: Upload Xcode diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: remodex-xcode-diagnostics
+          path: |
+            build/unsigned-ipa/xcodebuild.log
+            build/unsigned-ipa/CodexMobile.xcresult
+          if-no-files-found: ignore
