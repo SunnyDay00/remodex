@@ -10,6 +10,21 @@
 
 Control [Codex](https://openai.com/index/codex/) from your iPhone. Remodex is a local-first open-source bridge + iOS app that keeps the Codex runtime on your Mac and lets your phone connect through a paired secure session.
 
+## Fork Notice
+
+This repository is forked from the original open-source project at [Emanuele-web04/remodex](https://github.com/Emanuele-web04/remodex) and keeps the upstream Apache-2.0 license.
+
+This fork is intended for self-hosted relay users. Compared with upstream, it changes the source build behavior so a self-hosted build can use its own relay without the App Store / RevenueCat access gate:
+
+- enables `REMODEX_SELF_HOSTED_UNLOCKED_BUILD = YES` in the public Xcode build defaults
+- skips RevenueCat initialization when the self-hosted unlock flag is enabled
+- grants app access for self-hosted builds and does not consume the local free-send quota
+- shows a `Self-hosted` subscription state in Settings and hides purchase, redeem, and restore actions for that build
+- adds unit coverage for the self-hosted access path
+- adds a GitHub Actions workflow that builds and publishes an unsigned IPA artifact for this fork
+
+The IPA attached to this fork's GitHub releases is unsigned. You still need to sign it with your own Apple certificate or use a sideloading tool before installing it on a device.
+
 ## Key App Features
 
 - End-to-end encrypted pairing and chats between your iPhone and Mac
@@ -41,6 +56,8 @@ If you want the public-repo distribution model explained clearly, read [SELF_HOS
 ## Get the App
 
 The app is live on the [App Store](https://apps.apple.com/us/app/remodex-remote-ai-coding/id6760243963).
+
+This fork also publishes unsigned IPA builds in [GitHub Releases](https://github.com/SunnyDay00/remodex/releases) for self-hosted users who want to sign or sideload their own build.
 
 Build the iOS app from source in Xcode, install your own signed build on-device, then use the in-app onboarding flow to pair by scanning the QR from `remodex up`.
 
