@@ -8,6 +8,7 @@ import Foundation
 
 enum AppEnvironment {
     private static let defaultRelayURLInfoPlistKey = "PHODEX_DEFAULT_RELAY_URL"
+    private static let selfHostedUnlockedBuildInfoPlistKey = "REMODEX_SELF_HOSTED_UNLOCKED_BUILD"
     private static let revenueCatPublicAPIKeyInfoPlistKey = "REVENUECAT_PUBLIC_API_KEY"
     private static let revenueCatEntitlementNameInfoPlistKey = "REVENUECAT_ENTITLEMENT_NAME"
     private static let revenueCatDefaultOfferingIDInfoPlistKey = "REVENUECAT_DEFAULT_OFFERING_ID"
@@ -22,6 +23,10 @@ enum AppEnvironment {
             return infoURL
         }
         return defaultRelayURLString
+    }
+
+    static var isSelfHostedUnlockedBuild: Bool {
+        resolvedBool(forInfoPlistKey: selfHostedUnlockedBuildInfoPlistKey)
     }
 
     // Reads the public RevenueCat key shipped with the client build.
@@ -100,6 +105,19 @@ private extension AppEnvironment {
         }
 
         return trimmedValue
+    }
+
+    static func resolvedBool(forInfoPlistKey key: String) -> Bool {
+        guard let rawValue = resolvedString(forInfoPlistKey: key) else {
+            return false
+        }
+
+        switch rawValue.lowercased() {
+        case "1", "true", "yes", "enabled", "on":
+            return true
+        default:
+            return false
+        }
     }
 
     static func feedbackBody(

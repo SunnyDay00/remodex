@@ -82,6 +82,7 @@ final class SubscriptionService {
     private static let freeSendLimit = 5
 
     private let defaults: UserDefaults
+    private let selfHostedAccessEnabled: Bool
     @ObservationIgnored private let customerInfoUpdatesTaskStore = CustomerInfoUpdatesTaskStore()
     private var isBootstrapping = false
     private var hasCachedOptimisticAccess = false
@@ -100,9 +101,14 @@ final class SubscriptionService {
     private(set) var isRestoring = false
     private(set) var lastErrorMessage: String?
 
-    init(defaults: UserDefaults = .standard) {
+    init(
+        defaults: UserDefaults = .standard,
+        selfHostedAccessEnabled: Bool = AppEnvironment.isSelfHostedUnlockedBuild
+    ) {
         self.defaults = defaults
+        self.selfHostedAccessEnabled = selfHostedAccessEnabled
         restoreCachedStateIfAvailable()
+        applySelfHostedAccessStateIfNeeded()
         startCustomerInfoObserverIfConfigured()
     }
 
@@ -115,16 +121,23 @@ final class SubscriptionService {
     }
 
     var hasFreeSendAccess: Bool {
+        if selfHostedAccessEnabled {
+            return true
+        }
         freeSendCount < Self.freeSendLimit
     }
 
     var hasAppAccess: Bool {
-        hasProAccess || hasFreeSendAccess
+        selfHostedAccessEnabled || hasProAccess || hasFreeSendAccess
+    }
+
+    var hasSelfHostedAccess: Bool {
+        selfHostedAccessEnabled
     }
 
     // Counts a valid send attempt for free users even if the turn later fails.
     func consumeFreeSendAttemptIfNeeded() {
-        guard !hasProAccess, freeSendCount < Self.freeSendLimit else {
+        guard !selfHostedAccessEnabled, !hasProAccess, freeSendCount < Self.freeSendLimit else {
             return
         }
 
@@ -134,6 +147,11 @@ final class SubscriptionService {
 
     // Bootstraps subscription state once at launch or from the recovery retry action.
     func bootstrap() async {
+        guard !selfHostedAccessEnabled else {
+            applySelfHostedAccessStateIfNeeded()
+            return
+        }
+
         guard !isBootstrapping else {
             return
         }
@@ -167,6 +185,11 @@ final class SubscriptionService {
 
     // Refreshes the current subscription state without re-entering the blocking bootstrap UI.
     func refreshCustomerInfoSilently() async {
+        guard !selfHostedAccessEnabled else {
+            applySelfHostedAccessStateIfNeeded()
+            return
+        }
+
         guard !isBootstrapping, bootstrapState != .loading else {
             return
         }
@@ -187,6 +210,11 @@ final class SubscriptionService {
 
     // Reads the current RevenueCat offerings and normalizes the package list for SwiftUI.
     func loadOfferings() async {
+        guard !selfHostedAccessEnabled else {
+            applySelfHostedAccessStateIfNeeded()
+            return
+        }
+
         startCustomerInfoObserverIfConfigured()
         isLoading = true
         lastErrorMessage = nil
@@ -198,6 +226,11 @@ final class SubscriptionService {
 
     // Starts a purchase flow for the selected package and refreshes entitlements on success.
     func purchase(_ option: SubscriptionPackageOption) async {
+        guard !selfHostedAccessEnabled else {
+            lastErrorMessage = nil
+            return
+        }
+
         guard !isPurchasing else {
             return
         }
@@ -233,6 +266,11 @@ final class SubscriptionService {
 
     // Restores store purchases and then re-checks the Pro entitlement state.
     func restorePurchases() async {
+        guard !selfHostedAccessEnabled else {
+            lastErrorMessage = nil
+            return
+        }
+
         guard !isRestoring else {
             return
         }
@@ -260,6 +298,11 @@ final class SubscriptionService {
 
     // Syncs StoreKit purchases that may have happened in Apple's code redemption sheet.
     func syncPurchasesAfterOfferCodeRedemption() async {
+        guard !selfHostedAccessEnabled else {
+            lastErrorMessage = nil
+            return
+        }
+
         startCustomerInfoObserverIfConfigured()
         guard Purchases.isConfigured else {
             lastErrorMessage = "Subscriptions are unavailable right now."
@@ -278,8 +321,23 @@ final class SubscriptionService {
 }
 
 private extension SubscriptionService {
+    func applySelfHostedAccessStateIfNeeded() {
+        guard selfHostedAccessEnabled else {
+            return
+        }
+
+        bootstrapState = .ready
+        packageOptions = []
+        isLoading = false
+        isPurchasing = false
+        isRestoring = false
+        lastErrorMessage = nil
+    }
+
     func startCustomerInfoObserverIfConfigured() {
-        guard customerInfoUpdatesTaskStore.task == nil, Purchases.isConfigured else {
+        guard !selfHostedAccessEnabled,
+              customerInfoUpdatesTaskStore.task == nil,
+              Purchases.isConfigured else {
             return
         }
 

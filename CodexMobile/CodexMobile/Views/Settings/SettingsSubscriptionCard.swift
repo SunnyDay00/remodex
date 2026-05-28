@@ -15,34 +15,39 @@ struct SettingsSubscriptionCard: View {
     var body: some View {
         SettingsCard(
             title: "Remodex Pro",
-            footer: subscriptions.hasProAccess
-                ? "Manage billing through your Apple ID subscription settings."
-                : "Unlock voice mode, unlimited threads, and more."
+            footer: footerText
         ) {
             SettingsValueRow(
                 title: "Plan",
-                value: subscriptions.hasProAccess ? "Active" : "Free",
-                valueColor: subscriptions.hasProAccess ? .green : .secondary
+                value: planValue,
+                valueColor: subscriptions.hasAppAccess ? .green : .secondary
             )
 
-            SettingsButton(subscriptions.hasProAccess ? "View Pro Benefits" : "Upgrade to Pro") {
-                onShowPaywall()
-            }
-
-            SettingsButton("Redeem Code") {
-                onRedeemCode()
-            }
-            .disabled(subscriptions.isPurchasing || subscriptions.isRestoring)
-
-            SettingsButton(
-                subscriptions.isRestoring ? "Restoring…" : "Restore Purchases",
-                isLoading: subscriptions.isRestoring
-            ) {
-                Task {
-                    await subscriptions.restorePurchases()
+            if !subscriptions.hasSelfHostedAccess {
+                SettingsButton(subscriptions.hasProAccess ? "View Pro Benefits" : "Upgrade to Pro") {
+                    onShowPaywall()
                 }
+
+                SettingsButton("Redeem Code") {
+                    onRedeemCode()
+                }
+                .disabled(subscriptions.isPurchasing || subscriptions.isRestoring)
+
+                SettingsButton(
+                    subscriptions.isRestoring ? "Restoring…" : "Restore Purchases",
+                    isLoading: subscriptions.isRestoring
+                ) {
+                    Task {
+                        await subscriptions.restorePurchases()
+                    }
+                }
+                .disabled(subscriptions.isPurchasing)
+            } else {
+                SettingsInlineMessage(
+                    text: "Purchases are disabled in this local source build.",
+                    tint: .green
+                )
             }
-            .disabled(subscriptions.isPurchasing)
 
             if let error = subscriptions.lastErrorMessage, !error.isEmpty {
                 SettingsInlineMessage(text: error, tint: .red)
@@ -54,5 +59,22 @@ struct SettingsSubscriptionCard: View {
             }
             await subscriptions.bootstrap()
         }
+    }
+
+    private var planValue: String {
+        if subscriptions.hasSelfHostedAccess {
+            return "Self-hosted"
+        }
+        return subscriptions.hasProAccess ? "Active" : "Free"
+    }
+
+    private var footerText: String {
+        if subscriptions.hasSelfHostedAccess {
+            return "This source build uses your self-hosted relay without RevenueCat billing."
+        }
+        if subscriptions.hasProAccess {
+            return "Manage billing through your Apple ID subscription settings."
+        }
+        return "Unlock voice mode, unlimited threads, and more."
     }
 }
